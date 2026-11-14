@@ -22,6 +22,7 @@ Coordinate:
   pmux read %2 40           last 40 lines of pane %2
   pmux send %2 \"text\"       type text + Enter into pane %2 (a poke, not durable)
   pmux new claude           open a pane next to you and run a command in it
+  pmux open src/x.rs        show a file to the operator in an editor tab (no focus change)
 
 State (the sidebar shows it to the operator):
   pmux status working|waiting|idle|done|error|clear
@@ -103,7 +104,15 @@ fn connect() -> Option<UnixStream> {
     socks.into_iter().rev().find_map(|(_, p)| UnixStream::connect(p).ok())
 }
 
-pub fn client(args: Vec<String>) -> i32 {
+pub fn client(mut args: Vec<String>) -> i32 {
+    // `open` takes a path relative to the caller's cwd; the app has its own cwd.
+    if args.first().map(String::as_str) == Some("open") {
+        if let Some(p) = args.get_mut(1) {
+            if let Ok(abs) = std::fs::canonicalize(&*p) {
+                *p = abs.display().to_string();
+            }
+        }
+    }
     let Some(mut s) = connect() else {
         eprintln!("pmux: no running pmux found (open one with `pmux`)");
         return 1;

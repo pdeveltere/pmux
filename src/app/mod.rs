@@ -2,8 +2,9 @@
 //!
 //! `App` is one struct; its behaviour is split by concern across the submodules, each adding an
 //! `impl App` block: `layout` (geometry), `pane` (terminals), `sidebar`, `explorer` (file panel),
-//! `navigate` (tabs/focus), `keys`, `mouse`, `menu`, `commands` (socket API).
+//! `edit` (editor panes), `navigate` (tabs/focus), `keys`, `mouse`, `menu`, `commands` (socket API).
 mod commands;
+mod edit;
 mod explorer;
 mod keys;
 mod layout;
@@ -86,6 +87,10 @@ pub struct App {
     /// Sidebar row press / reorder drag in progress.
     pub drag: Option<Drag>,
     mouse_pane: Option<(u32, MouseButton)>,
+    /// Editor pane being drag-selected.
+    edit_drag: Option<u32>,
+    /// Last editor click, for double-click.
+    edit_click: Option<(crate::editor::Pos, Instant)>,
     wheel_acc: f32,
     /// Font zoom request: +1 / -1 / 0 = reset.
     pub zoom: Option<i32>,
@@ -151,6 +156,8 @@ impl App {
             resizing: None,
             drag: None,
             mouse_pane: None,
+            edit_drag: None,
+            edit_click: None,
             wheel_acc: 0.0,
             zoom: None,
             dirty: true,

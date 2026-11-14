@@ -36,6 +36,9 @@ impl App {
             self.dirty = true;
             return;
         }
+        if let Some(id) = self.edit_drag {
+            return self.editor_drag(id, x, y);
+        }
         if let Some((id, b)) = self.mouse_pane {
             return self.pane_mouse(id, MouseKind::Drag(b), x, y);
         }
@@ -136,6 +139,12 @@ impl App {
             v.reveal(pr.id);
         }
         self.focus_panes();
+        if self.panes[&pr.id].editor.is_some() {
+            if b == MouseButton::Left && pr.body.contains(x, y) {
+                self.editor_press(pr.id, x, y);
+            }
+            return;
+        }
         if pr.body.contains(x, y) && self.panes[&pr.id].vt.mode().intersects(TermMode::MOUSE_MODE) {
             self.mouse_pane = Some((pr.id, b));
             self.pane_mouse(pr.id, MouseKind::Down(b), x, y);
@@ -144,6 +153,7 @@ impl App {
 
     fn on_release(&mut self, x: f32, y: f32) {
         self.resizing = None;
+        self.edit_drag = None;
         if let Some((id, mb)) = self.mouse_pane.take() {
             self.pane_mouse(id, MouseKind::Up(mb), x, y);
         }
@@ -197,6 +207,9 @@ impl App {
             return;
         }
         let Some(pr) = self.pane_body_at(x, y) else { return };
+        if self.panes[&pr.id].editor.is_some() {
+            return self.editor_wheel(pr.id, n);
+        }
         let mode = self.panes[&pr.id].vt.mode();
         if mode.intersects(TermMode::MOUSE_MODE) {
             let kind = if n > 0 { MouseKind::WheelUp } else { MouseKind::WheelDown };

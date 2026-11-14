@@ -1,5 +1,6 @@
-//! Terminal panes: spawning shells, PTY I/O, agent detection, mouse reporting.
+//! Panes: terminals (shells, PTY I/O, agent detection, mouse reporting) and editors.
 use super::{App, Ev, Tab, R};
+use crate::editor::Editor;
 use crate::platform;
 use crate::pty;
 use crate::term::Vt;
@@ -49,7 +50,10 @@ impl State {
 pub struct Pane {
     pub id: u32,
     pub vt: Vt,
-    master: File,
+    /// The PTY; `None` for an editor pane.
+    master: Option<File>,
+    /// Set for an editor pane (then `vt` is an idle placeholder).
+    pub editor: Option<Editor>,
     shell: i32,
     /// Foreground process group, last seen.
     pgid: i32,
@@ -89,22 +93,30 @@ impl Pane {
     }
 
     pub fn label(&self) -> String {
+        if let Some(e) = &self.editor {
+            return e.name();
+        }
         self.title.clone().or_else(|| self.osc_title.clone()).or(self.agent.map(String::from)).unwrap_or_else(|| "shell".into())
     }
 
     /// The agent's name, or "shell".
     pub fn kind(&self) -> &'static str {
+        if self.editor.is_some() {
+            return "editor";
+        }
         self.agent.unwrap_or("shell")
     }
 
     /// Write to the PTY (keyboard input, query replies).
     pub(super) fn write(&mut self, bytes: &[u8]) {
-        let _ = self.master.write_all(bytes);
+        if let Some(m) = &mut self.master {
+            let _ = m.write_all(bytes);
+        }
     }
 
     /// Send Enter after a short delay, so agents don't take it as part of a paste.
     pub(super) fn enter_later(&self) {
-        if let Ok(mut f) = self.master.try_clone() {
+        if let Some(Ok(mut f)) = self.master.as_ref().map(File::try_clone) {
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(80));
                 let _ = f.write_all(b"\r");
@@ -116,13 +128,18 @@ impl Pane {
         if self.rows != rows || self.cols != cols {
             self.rows = rows;
             self.cols = cols;
-            self.vt.resize(cols, rows);
-            pty::resize(&self.master, rows as u16, cols as u16, cols as u16 * cw, rows as u16 * ch);
+            if let Some(m) = &self.master {
+                self.vt.resize(cols, rows);
+                pty::resize(m, rows as u16, cols as u16, cols as u16 * cw, rows as u16 * ch);
+            }
         }
     }
 
     /// Hang up the shell and whatever runs in the foreground.
     fn hangup(&self) {
+        if self.master.is_none() {
+            return;
+        }
         unsafe {
             libc::kill(-self.pgid, libc::SIGHUP);
             libc::kill(-self.shell, libc::SIGHUP);
@@ -131,11 +148,12 @@ impl Pane {
 
     /// Which process owns the terminal: detects agents starting and exiting (throttled syscall).
     fn probe_agent(&mut self, now: Instant) {
+        let Some(master) = &self.master else { return };
         if now - self.last_probe <= PROBE_EVERY {
             return;
         }
         self.last_probe = now;
-        let pg = pty::fg_pgrp(&self.master);
+        let pg = pty::fg_pgrp(master);
         if pg != self.pgid {
             self.pgid = pg;
             let a = pty::proc_path(pg).as_deref().and_then(pty::agent_of);
@@ -203,11 +221,45 @@ impl App {
         std::thread::spawn(move || {
             let _ = child.wait();
         });
+        let pane = Pane::new(id, view, Vt::new(cols, rows), Some(pty.master), None, pgid, (cols, rows));
+        self.insert_pane(pane, view, new_tab);
+        Ok(id)
+    }
+
+    /// New editor pane on `path`, in a new tab of `view`. Returns its id.
+    pub(super) fn spawn_editor(&mut self, view: &Path, path: &Path) -> Result<u32, String> {
+        let ed = Editor::open(path)?;
+        let id = self.next_id;
+        self.next_id += 1;
+        let pane = Pane::new(id, view, Vt::new(2, 1), None, Some(ed), 0, (0, 0));
+        self.insert_pane(pane, view, true);
+        self.apply_layout();
+        Ok(id)
+    }
+
+    fn insert_pane(&mut self, pane: Pane, view: &Path, new_tab: bool) {
+        let id = pane.id;
+        self.panes.insert(id, pane);
+        let v = self.views.entry(view.to_path_buf()).or_default();
+        if new_tab || v.tabs.is_empty() {
+            v.tabs.push(Tab::default());
+            v.tab = v.tabs.len() - 1;
+        }
+        let t = v.cur_mut().expect("tab exists");
+        t.panes.push(id);
+        t.focus = t.panes.len() - 1;
+        self.dirty = true;
+    }
+}
+
+impl Pane {
+    fn new(id: u32, view: &Path, vt: Vt, master: Option<File>, editor: Option<Editor>, pgid: i32, (cols, rows): (usize, usize)) -> Self {
         let long_ago = Instant::now() - Duration::from_secs(60);
-        let pane = Pane {
+        Pane {
             id,
-            vt: Vt::new(cols, rows),
-            master: pty.master,
+            vt,
+            master,
+            editor,
             shell: pgid,
             pgid,
             view: view.to_path_buf(),
@@ -221,20 +273,11 @@ impl App {
             last_probe: long_ago,
             rows,
             cols,
-        };
-        self.panes.insert(id, pane);
-        let v = self.views.entry(view.to_path_buf()).or_default();
-        if new_tab || v.tabs.is_empty() {
-            v.tabs.push(Tab::default());
-            v.tab = v.tabs.len() - 1;
         }
-        let t = v.cur_mut().expect("tab exists");
-        t.panes.push(id);
-        t.focus = t.panes.len() - 1;
-        self.dirty = true;
-        Ok(id)
     }
+}
 
+impl App {
     /// Input to a pane (marks it as typed-into, for the working heuristic).
     pub(super) fn write_pane(&mut self, id: u32, bytes: &[u8]) {
         if let Some(p) = self.panes.get_mut(&id) {
@@ -254,10 +297,18 @@ impl App {
     }
 
     /// Ask a pane to close; it's removed when its PTY closes (`on_exit`).
+    /// An editor closes at once; with unsaved changes only on the second try.
     pub(super) fn kill_pane(&mut self, id: u32) {
-        if let Some(p) = self.panes.get(&id) {
-            p.hangup();
+        let Some(p) = self.panes.get_mut(&id) else { return };
+        if let Some(e) = &mut p.editor {
+            if e.modified() && !e.close_armed {
+                e.close_armed = true;
+                let name = e.name();
+                return self.say(format!("{name} has unsaved changes: close again to discard, ⌘S to save"));
+            }
+            return self.on_exit(id);
         }
+        p.hangup();
     }
 
     pub(super) fn kill_panes(&mut self, ids: impl IntoIterator<Item = u32>) {

@@ -147,8 +147,10 @@ pub enum Action {
     Reveal(PathBuf),
     /// Copy text to the clipboard as-is.
     Copy(String),
-    /// Open a file in `$EDITOR` in a new tab.
+    /// Open a file in an editor tab.
     OpenFile(PathBuf),
+    /// Open a file in `$EDITOR` in a new terminal tab.
+    EditFile(PathBuf),
     /// New terminal tab with this cwd.
     Terminal(PathBuf),
     /// Expand/collapse an explorer folder.

@@ -1,6 +1,7 @@
 mod api;
 mod app;
 mod config;
+mod editor;
 mod files;
 mod git;
 mod gpu;
@@ -8,6 +9,7 @@ mod icons;
 mod input;
 mod platform;
 mod pty;
+mod syntax;
 mod term;
 mod text;
 mod ui;
@@ -34,6 +36,7 @@ usage:
   pmux send <pane> <text>   type text + Enter into a pane
   pmux new [cmd...]         open a pane next to this one (optionally run cmd)
   pmux new --tab [cmd...]   open a pane in a new tab of this worktree
+  pmux open <file>          open a file in an editor tab of this worktree
   pmux status <state>       set my state: working|waiting|idle|done|error|clear
   pmux title <text>         set my title
   pmux ws new <name>                   add a workspace

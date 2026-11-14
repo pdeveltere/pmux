@@ -171,7 +171,11 @@ impl App {
             vec![item(label, Action::FileToggle(path.clone())), item("New terminal here", Action::Terminal(path.clone()))]
         } else {
             let parent = path.parent().map_or_else(|| e.root.clone(), Path::to_path_buf);
-            vec![item("Open in $EDITOR", Action::OpenFile(path.clone())), item("New terminal here", Action::Terminal(parent))]
+            vec![
+                item("Open", Action::OpenFile(path.clone())),
+                item("Open in $EDITOR", Action::EditFile(path.clone())),
+                item("New terminal here", Action::Terminal(parent)),
+            ]
         };
         items.push(sep());
         items.push(item("Copy path", Action::CopyPath(path.clone())));
@@ -182,8 +186,8 @@ impl App {
         self.show_menu(items, x, y);
     }
 
-    /// Open a file in `$EDITOR`, in a new tab of the current view (the shell stays when the editor quits).
-    pub(super) fn open_file(&mut self, p: &Path) {
+    /// Open a file in `$EDITOR`, in a new terminal tab of the current view (the shell stays when the editor quits).
+    pub(super) fn edit_in_terminal(&mut self, p: &Path) {
         let Some(view) = self.current.clone() else { return };
         let arg = p.strip_prefix(&view).ok().filter(|r| !r.as_os_str().is_empty()).unwrap_or(p);
         let cmd = format!("${{EDITOR:-vi}} {}\r", util::shell_quote(&arg.display().to_string()));

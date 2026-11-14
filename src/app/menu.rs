@@ -105,6 +105,7 @@ impl App {
                 self.say(format!("copied {t}"));
             }
             Action::OpenFile(p) => self.open_file(&p),
+            Action::EditFile(p) => self.edit_in_terminal(&p),
             Action::Terminal(d) => {
                 self.spawn_here(Some(&d), true);
             }

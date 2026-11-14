@@ -73,6 +73,7 @@ impl App {
                 self.panes[&id].enter_later();
                 Reply::ok("")
             }
+            ["open", path] => self.api_open(me, path),
             ["new", rest @ ..] => {
                 let (tab, cmd) = match rest {
                     ["--tab", cmd @ ..] => (true, cmd),
@@ -178,6 +179,20 @@ impl App {
                 }
                 Reply::ok(format!("%{id}"))
             }
+            Err(e) => Reply::err(e),
+        }
+    }
+
+    /// `pmux open <file>`: an editor tab in the caller's worktree (or the shown one).
+    fn api_open(&mut self, me: Option<u32>, path: &str) -> Reply {
+        let p = PathBuf::from(path);
+        if !p.is_file() {
+            return Reply::err(format!("not a file: {path}"));
+        }
+        let view = me.and_then(|id| self.panes.get(&id)).map(|p| p.view.clone()).or(self.current.clone());
+        let Some(view) = view else { return Reply::err("no current worktree") };
+        match self.open_file_in(&view, &p) {
+            Ok(id) => Reply::ok(format!("%{id}")),
             Err(e) => Reply::err(e),
         }
     }

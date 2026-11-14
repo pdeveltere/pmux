@@ -12,6 +12,9 @@ impl App {
             p.input.push_str(s.trim());
             return;
         }
+        if self.has_focused_editor() {
+            return self.editor_paste(s);
+        }
         let Some(id) = self.focused().filter(|_| self.focus == Focus::Panes) else { return };
         let bp = self.panes[&id].vt.mode().contains(TermMode::BRACKETED_PASTE);
         let s = s.replace("\r\n", "\r").replace('\n', "\r");
@@ -31,6 +34,9 @@ impl App {
         }
         // App shortcuts on Cmd (Super).
         if m.super_key() {
+            if self.prompt.is_none() && self.editor_cmd_key(k, ch) {
+                return;
+            }
             return self.cmd_key(k, ch);
         }
         if self.prompt.is_some() {
@@ -55,6 +61,9 @@ impl App {
             Some(id) if self.focus != Focus::Sidebar => id,
             _ => return self.sidebar_key(k, ch),
         };
+        if self.panes[&id].editor.is_some() {
+            return self.editor_key(k);
+        }
         let ac = self.panes[&id].vt.mode().contains(TermMode::APP_CURSOR);
         let bytes = input::encode(k, m, ac);
         if !bytes.is_empty() {

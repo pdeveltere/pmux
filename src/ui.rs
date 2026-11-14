@@ -35,6 +35,8 @@ const GUIDE_ACTIVE: C = rgb(0x52, 0x52, 0x5e);
 /// ACCENT at 12% (premultiplied alpha).
 const DRAG_TINT: C = [0x5b as f32 / 255.0 * 0.12, 0x9b as f32 / 255.0 * 0.12, 0.12, 0.12];
 const CURSOR: C = rgb(0xd8, 0xd8, 0xd8);
+/// Editor: the cursor's line.
+const CURRENT_LINE: C = rgb(0x22, 0x22, 0x27);
 
 const ANSI: [(u8, u8, u8); 16] = [
     (0x1c, 0x1c, 0x20),
@@ -444,7 +446,11 @@ fn tabs(app: &App, p: &mut Painter) {
             p.rect(R { h: r.h - line, ..r }, HOVER);
         }
         p.rect(R { x: r.x + r.w - line, w: line, h: r.h - if shown { 0.0 } else { line }, ..r }, BORDER);
-        let label = t.panes.get(t.focus).and_then(|id| app.panes.get(id)).map(|pn| short_title(pn.label())).unwrap_or_default();
+        let fp = t.panes.get(t.focus).and_then(|id| app.panes.get(id));
+        let mut label = fp.map(|pn| short_title(pn.label())).unwrap_or_default();
+        if fp.and_then(|pn| pn.editor.as_ref()).is_some_and(|e| e.modified()) {
+            label.push_str(" ●");
+        }
         let mut x = r.x + app.px(12.0);
         // State dot when any pane in the tab reports one (most urgent first).
         if let Some(st) = t.panes.iter().filter_map(|id| app.panes.get(id)?.state()).max() {
@@ -497,6 +503,10 @@ fn panes(app: &App, p: &mut Painter) {
         // No header: with several panes, a thin accent line marks the focused one.
         if is_focus && layout.len() > 1 {
             p.rect(R { h: app.px(2.0), ..pr.column }, ACCENT);
+        }
+        if let Some(ed) = &pane.editor {
+            editor(app, p, ed, pr.body, is_focus);
+            continue;
         }
         // Scrolled back: small badge in the top-right corner.
         let off = pane.vt.display_offset();
@@ -596,6 +606,96 @@ fn grid(app: &App, p: &mut Painter, pane: &Pane, body: R, focus: bool) {
     }
 }
 
+/// Color and font style (bit 0 bold, bit 1 italic) for a highlight, after Zed's One Dark.
+fn syntax_style(k: u8) -> (C, u8) {
+    let name = crate::syntax::NAMES[k as usize];
+    let c = match name {
+        "keyword" => rgb(0xb4, 0x77, 0xcf),
+        "string" | "text.literal" | "markup.raw" => rgb(0xa1, 0xc1, 0x81),
+        "string.escape" => rgb(0x87, 0x8e, 0x98),
+        "string.special" | "number" | "boolean" | "constant" | "constant.builtin" | "variable.builtin" => rgb(0xbf, 0x95, 0x6a),
+        "comment" | "comment.doc" => rgb(0x5d, 0x63, 0x6f),
+        "function" | "function.builtin" | "function.macro" | "function.method" | "constructor" | "attribute" | "tag" | "label" => rgb(0x73, 0xad, 0xe9),
+        "type" | "type.builtin" | "operator" | "module" | "text.uri" | "markup.link" | "text.reference" => rgb(0x6e, 0xb4, 0xbf),
+        "property" | "text.title" | "markup.heading" => rgb(0xd0, 0x72, 0x77),
+        "punctuation" | "punctuation.bracket" | "punctuation.delimiter" | "punctuation.special" => rgb(0xb2, 0xb9, 0xc6),
+        "escape" => rgb(0x87, 0x8e, 0x98),
+        _ => TEXT,
+    };
+    let style = match name {
+        "text.title" | "markup.heading" | "text.strong" | "markup.bold" => 1,
+        "text.emphasis" | "markup.italic" => 2,
+        _ => 0,
+    };
+    (c, style)
+}
+
+/// An editor pane: line numbers, current-line highlight, selection, text, bar cursor.
+fn editor(app: &App, p: &mut Painter, ed: &crate::editor::Editor, body: R, focus: bool) {
+    use crate::editor::Pos;
+    let g = app.editor_geom(body, ed);
+    let (cw, ch) = (app.cell_w, app.cell_h);
+    let base = p.fonts.baseline;
+    let sel = ed.selection();
+    let end = (ed.top + g.rows + 1).min(ed.lines.len());
+    let mut glyphs: Vec<(char, u8, f32, f32, C)> = Vec::new();
+    for l in ed.top..end {
+        let y = g.text.y + (l - ed.top) as f32 * ch;
+        if y >= body.y + body.h {
+            break;
+        }
+        let here = l == ed.cur.line;
+        if here && sel.is_none() {
+            p.rect(R { y, h: ch, ..body }, CURRENT_LINE);
+        }
+        // Selection on this line: [a, b) in display cells, plus one cell for the newline.
+        if let Some((a, b)) = sel.filter(|(a, b)| (a.line..=b.line).contains(&l)) {
+            let x0 = if l == a.line { ed.x_of(a) } else { 0 };
+            let x1 = if l == b.line { ed.x_of(b) } else { ed.x_of(Pos::new(l, usize::MAX)) + 1 };
+            let (x0, x1) = (x0.max(ed.left) - ed.left, x1.saturating_sub(ed.left).min(g.cols));
+            if x1 > x0 {
+                p.rect(R { x: g.text.x + x0 as f32 * cw, y, w: (x1 - x0) as f32 * cw, h: ch }, SELECT);
+            }
+        }
+        // Line number, right-aligned with two cells before the text.
+        let num = (l + 1).to_string();
+        let nx = g.gutter.x + g.gutter.w - (num.len() as f32 + 2.0) * cw;
+        for (i, c) in num.chars().enumerate() {
+            glyphs.push((c, 0, nx + i as f32 * cw, y + base, if here { MUTED } else { FAINT }));
+        }
+        let spans = ed.hl.get(l).map(Vec::as_slice).unwrap_or(&[]);
+        let mut si = 0;
+        let mut x = 0usize;
+        for (col, c) in ed.lines[l].chars().enumerate() {
+            while si < spans.len() && spans[si].1 <= col {
+                si += 1;
+            }
+            let (fg, style) = spans.get(si).filter(|s| s.0 <= col).map_or((TEXT, 0), |s| syntax_style(s.2));
+            let w = if c == '\t' { crate::editor::TAB - x % crate::editor::TAB } else { 1 };
+            if x >= ed.left + g.cols {
+                break;
+            }
+            if x >= ed.left && c != ' ' && c != '\t' {
+                glyphs.push((c, style, g.text.x + (x - ed.left) as f32 * cw, y + base, fg));
+            }
+            x += w;
+        }
+    }
+    for (c, style, x, y, fg) in glyphs {
+        if let Some((gl, gx, gy)) = p.fonts.cell(c, style) {
+            p.glyph(gl, x + gx as f32, y + gy as f32, fg);
+        }
+    }
+    // Bar cursor; hidden when the pane isn't focused (as in Zed).
+    let cx = ed.x_of(ed.cur);
+    if focus && ed.cur.line >= ed.top && cx >= ed.left && cx <= ed.left + g.cols {
+        let y = g.text.y + (ed.cur.line - ed.top) as f32 * ch;
+        if y < body.y + body.h {
+            p.rect(R { x: g.text.x + (cx - ed.left) as f32 * cw, y, w: app.px(2.0), h: ch }, ACCENT);
+        }
+    }
+}
+
 /// Right-click context menu, drawn on top of everything.
 fn menu(app: &App, p: &mut Painter) {
     let Some(m) = &app.menu else { return };
@@ -635,8 +735,10 @@ fn status(app: &App, p: &mut Painter) {
     let right = if app.prefix {
         "| split · t tab · 1-9 tab · h/l focus · x close · c clear · j/k worktree · n attention · Tab sidebar · b hide · q quit"
     } else {
+        let editing = app.focus == Focus::Panes && app.focused().and_then(|id| app.panes.get(&id)).is_some_and(|pn| pn.editor.is_some());
         match app.focus {
-            Focus::Files => "Enter open in $EDITOR · ←→ fold · right-click for actions · Esc back · ⌘⇧E hide",
+            Focus::Panes if editing => "⌘S save · ⌘Z undo · ⌘⇧Z redo · ⌘X/C line or selection · ⌘[ ] indent · ⌘W close · ⌘T terminal tab",
+            Focus::Files => "Enter open · ←→ fold · right-click for actions · Esc back · ⌘⇧E hide",
             Focus::Sidebar => "Enter open · right-click for actions · a add project · w worktree · W workspace · D delete worktree · x delete",
             Focus::Panes => "⌘T tab · ⌘⇧[ ] tabs · ⌘D split · ⌘[ ] focus · ⌘K clear · ⌘E sidebar · ⌘⇧E files · ⌘↑↓ worktree · C-a prefix",
         }
