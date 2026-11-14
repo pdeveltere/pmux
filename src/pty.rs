@@ -32,6 +32,14 @@ pub fn spawn(cwd: &Path, rows: u16, cols: u16, env: &[(&str, String)]) -> io::Re
         .stdin(slave.try_clone()?)
         .stdout(slave.try_clone()?)
         .stderr(slave);
+    // Don't leak a parent Claude Code session's env (pmux is often launched from one):
+    // a `claude` started in a pane would think it's a child session and disable transcripts.
+    for (k, _) in std::env::vars_os() {
+        let k = k.to_string_lossy();
+        if k.starts_with("CLAUDE") || k == "AI_AGENT" {
+            cmd.env_remove(&*k);
+        }
+    }
     for (k, v) in env {
         cmd.env(k, v);
     }

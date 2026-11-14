@@ -1,0 +1,216 @@
+//! Mouse: hover state and cursor shape, clicks, panel resizing, row drags, the wheel.
+use super::pane::MouseKind;
+use super::{proj_key, App, Drag, Edge, Row, TabHit};
+use alacritty_terminal::grid::Scroll;
+use alacritty_terminal::term::TermMode;
+use winit::event::{ElementState, MouseButton};
+use winit::window::CursorIcon;
+
+/// How far a pressed row moves before it becomes a drag.
+const DRAG_START: f32 = 4.0;
+
+impl App {
+    fn set_cursor(&mut self, icon: CursorIcon) {
+        if icon != self.cursor_icon {
+            self.cursor_icon = icon;
+            self.dirty = true;
+        }
+    }
+
+    pub fn on_cursor_moved(&mut self, x: f32, y: f32) {
+        self.mouse = (x, y);
+        if self.menu.is_some() {
+            let h = self.menu_item_at(x, y);
+            let m = self.menu.as_mut().expect("menu is open");
+            if m.hover != h {
+                m.hover = h;
+                self.dirty = true;
+            }
+            return self.set_cursor(if h.is_some() { CursorIcon::Pointer } else { CursorIcon::Default });
+        }
+        if let Some(edge) = self.resizing {
+            match edge {
+                Edge::Sidebar => self.sidebar_w = self.panel_width(x),
+                Edge::Files => self.files_w = self.panel_width(self.w - x),
+            }
+            self.dirty = true;
+            return;
+        }
+        if let Some((id, b)) = self.mouse_pane {
+            return self.pane_mouse(id, MouseKind::Drag(b), x, y);
+        }
+        if let Some(d) = &self.drag {
+            if d.active || (y - d.start_y).abs() > self.px(DRAG_START) {
+                let target = if self.sidebar_rect().contains(x, y) { self.drop_target(d.row, y) } else { None };
+                let d = self.drag.as_mut().expect("drag in progress");
+                d.active = true;
+                d.target = target;
+                self.hover = None;
+                self.cursor_icon = CursorIcon::Grabbing;
+                self.dirty = true;
+            }
+            return;
+        }
+        self.update_hover(x, y);
+    }
+
+    /// What's under the mouse: hovered rows/buttons and the cursor shape.
+    fn update_hover(&mut self, x: f32, y: f32) {
+        let (mut hover, mut tab, mut file) = (None, None, None);
+        let mut icon = CursorIcon::Default;
+        if self.prompt.is_none() {
+            if self.edge_at(x).is_some() {
+                icon = CursorIcon::ColResize;
+            } else if self.files_rect().contains(x, y) {
+                file = self.files_row_at(y);
+            } else if self.sidebar_rect().contains(x, y) {
+                hover = self.sidebar_row_at(y);
+            } else if self.pane_body_at(x, y).is_some() {
+                icon = CursorIcon::Text;
+            }
+            tab = self.tab_at(x, y);
+            if hover.is_some() || file.is_some() || tab.is_some() {
+                icon = CursorIcon::Pointer;
+            }
+        }
+        if (hover, tab, file) != (self.hover, self.tab_hover, self.files_hover) {
+            (self.hover, self.tab_hover, self.files_hover) = (hover, tab, file);
+            self.dirty = true;
+        }
+        self.set_cursor(icon);
+    }
+
+    pub fn on_mouse_button(&mut self, state: ElementState, b: MouseButton) {
+        let (x, y) = self.mouse;
+        self.dirty = true;
+        if state == ElementState::Released {
+            return self.on_release(x, y);
+        }
+        // An open menu takes the click: run the item, or dismiss.
+        if self.menu.is_some() {
+            let hit = self.menu_item_at(x, y);
+            let m = self.menu.take().expect("menu is open");
+            if let (Some(i), MouseButton::Left) = (hit, b) {
+                self.run_action(m.items[i].1.clone());
+            }
+            return;
+        }
+        let free = self.prompt.is_none();
+        let edge = self.edge_at(x);
+        if free && edge == Some(Edge::Files) {
+            self.resizing = (b == MouseButton::Left).then_some(Edge::Files);
+            return;
+        }
+        if free && self.files_rect().contains(x, y) {
+            return self.files_click(b, x, y);
+        }
+        let in_sidebar = self.sidebar_rect().contains(x, y);
+        if free && in_sidebar && b == MouseButton::Right {
+            return self.open_sidebar_menu(self.sidebar_row_at(y), x, y);
+        }
+        if edge == Some(Edge::Sidebar) {
+            self.resizing = (b == MouseButton::Left).then_some(Edge::Sidebar);
+            return;
+        }
+        if in_sidebar {
+            if b == MouseButton::Left {
+                self.sidebar_press(x, y);
+            }
+            return;
+        }
+        if self.tab_bar().contains(x, y) {
+            return match (self.tab_at(x, y), b) {
+                (Some(TabHit::New), MouseButton::Left) => self.new_tab(),
+                (Some(TabHit::Close(i)), MouseButton::Left) => self.close_tab(i),
+                (Some(TabHit::Tab(i)), MouseButton::Left) => self.select_tab(i as isize, false),
+                (Some(h), MouseButton::Middle) => {
+                    if let Some(i) = h.tab() {
+                        self.close_tab(i);
+                    }
+                }
+                _ => {}
+            };
+        }
+        let Some(pr) = self.pane_at(x, y) else { return };
+        if let Some(v) = self.current_view_mut() {
+            v.reveal(pr.id);
+        }
+        self.focus_panes();
+        if pr.body.contains(x, y) && self.panes[&pr.id].vt.mode().intersects(TermMode::MOUSE_MODE) {
+            self.mouse_pane = Some((pr.id, b));
+            self.pane_mouse(pr.id, MouseKind::Down(b), x, y);
+        }
+    }
+
+    fn on_release(&mut self, x: f32, y: f32) {
+        self.resizing = None;
+        if let Some((id, mb)) = self.mouse_pane.take() {
+            self.pane_mouse(id, MouseKind::Up(mb), x, y);
+        }
+        if let Some(d) = self.drag.take() {
+            match (d.active, d.target) {
+                (false, _) => self.click_row(d.row),
+                (true, Some((t, _, _))) => self.drop_row(d.row, t),
+                _ => {}
+            }
+            self.on_cursor_moved(x, y);
+        }
+    }
+
+    /// Left press in the sidebar: a project's folder icon (fold), or a row.
+    fn sidebar_press(&mut self, x: f32, y: f32) {
+        let Some(i) = self.sidebar_row_at(y) else { return };
+        let row = self.rows()[i];
+        self.sel = i;
+        // A project's folder icon folds it; the rest of the row opens it.
+        if let Row::Proj(w, p) = row {
+            let proj = self.project(w, p);
+            if proj.has_linked() && self.sidebar_tree(self.rows().len()).row(row.level(), i).icon.contains(x, y) {
+                return self.toggle_fold(proj_key(&proj.path));
+            }
+        }
+        // Workspace/project rows act on release, so they can be dragged to reorder.
+        if matches!(row, Row::Ws(_) | Row::Proj(..)) {
+            self.drag = Some(Drag { row, start_y: y, active: false, target: None });
+            return;
+        }
+        self.click_row(row);
+    }
+
+    /// Wheel: `dy` in lines (positive = up / back in history).
+    pub fn on_wheel(&mut self, dy_lines: f32) {
+        let (x, y) = self.mouse;
+        self.wheel_acc += dy_lines;
+        let n = self.wheel_acc.trunc() as i32;
+        if n == 0 {
+            return;
+        }
+        self.wheel_acc -= n as f32;
+        self.dirty = true;
+        if self.files_rect().contains(x, y) {
+            self.files_scroll(n);
+            return self.on_cursor_moved(x, y);
+        }
+        if self.sidebar_rect().contains(x, y) {
+            let len = self.rows().len();
+            self.sel = (self.sel as i32 - n).clamp(0, len.saturating_sub(1) as i32) as usize;
+            return;
+        }
+        let Some(pr) = self.pane_body_at(x, y) else { return };
+        let mode = self.panes[&pr.id].vt.mode();
+        if mode.intersects(TermMode::MOUSE_MODE) {
+            let kind = if n > 0 { MouseKind::WheelUp } else { MouseKind::WheelDown };
+            for _ in 0..n.abs() {
+                self.pane_mouse(pr.id, kind, x, y);
+            }
+        } else if mode.contains(TermMode::ALT_SCREEN) {
+            // Full-screen apps without mouse support: arrow keys, if they asked for that.
+            if mode.contains(TermMode::ALTERNATE_SCROLL) {
+                let k: &[u8] = if n > 0 { b"\x1b[A" } else { b"\x1b[B" };
+                self.write_pane(pr.id, &k.repeat(n.unsigned_abs() as usize));
+            }
+        } else if let Some(p) = self.panes.get_mut(&pr.id) {
+            p.vt.scroll(Scroll::Delta(n));
+        }
+    }
+}

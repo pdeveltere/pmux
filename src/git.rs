@@ -1,4 +1,6 @@
-//! Worktree discovery by reading .git files directly: no `git` subprocess.
+//! Git: worktree discovery by reading .git files directly (no subprocess), plus the few
+//! operations that do shell out to `git` (add/remove worktrees, status, behind counts).
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -8,6 +10,35 @@ pub struct Worktree {
     pub path: PathBuf,
     pub branch: String,
     pub main: bool,
+}
+
+/// Git state of a path. Order is severity: a folder takes the worst state inside it.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum FileState {
+    Ignored,
+    Added,
+    Deleted,
+    Modified,
+    Conflict,
+}
+
+/// `git status` of a checkout, by absolute path.
+#[derive(Default)]
+pub struct Status {
+    /// Exact paths, plus every changed path's ancestor folders.
+    pub paths: HashMap<PathBuf, FileState>,
+    /// Folders reported whole (ignored or untracked): everything under them inherits.
+    pub trees: HashMap<PathBuf, FileState>,
+}
+
+impl Status {
+    /// State of `path` inside `root`: its own, else that of a folder reported whole above it.
+    pub fn get(&self, root: &Path, path: &Path) -> Option<FileState> {
+        if let Some(g) = self.paths.get(path) {
+            return Some(*g);
+        }
+        path.ancestors().take_while(|a| a.starts_with(root)).find_map(|a| self.trees.get(a).copied())
+    }
 }
 
 fn read(p: &Path) -> Option<String> {
@@ -91,8 +122,9 @@ fn slug(branch: &str) -> String {
     s.trim_matches('-').to_string()
 }
 
-fn run(project: &Path, args: &[&str]) -> Result<String, String> {
-    let o = Command::new("git").arg("-C").arg(project).args(args).output().map_err(|e| e.to_string())?;
+/// Run `git -C dir args…`: stdout, or the last line of stderr.
+fn run(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let o = Command::new("git").arg("-C").arg(dir).args(args).output().map_err(|e| e.to_string())?;
     if o.status.success() {
         Ok(String::from_utf8_lossy(&o.stdout).into())
     } else {
@@ -130,4 +162,43 @@ pub fn dirty(wt: &Path) -> bool {
 /// Commits HEAD is behind its upstream; 0 without one. Read-only: writes nothing under .git.
 pub fn behind(wt: &Path) -> u32 {
     run(wt, &["--no-optional-locks", "rev-list", "--count", "HEAD..@{u}"]).ok().and_then(|o| o.trim().parse().ok()).unwrap_or(0)
+}
+
+/// `git status` for the repo containing `root`, limited to `root` (blocking: call off the UI thread).
+pub fn status(root: &Path) -> Status {
+    let mut st = Status::default();
+    let Ok(top) = run(root, &["rev-parse", "--show-toplevel"]) else { return st };
+    let top = PathBuf::from(top.trim());
+    let top = fs::canonicalize(&top).unwrap_or(top);
+    let Ok(out) = run(root, &["status", "--porcelain=v1", "-z", "--ignored", "-unormal", "--", "."]) else { return st };
+    let mut recs = out.split('\0').filter(|r| r.len() > 3);
+    while let Some(r) = recs.next() {
+        let (x, y) = (r.as_bytes()[0], r.as_bytes()[1]);
+        let rel = &r[3..];
+        if x == b'R' || x == b'C' {
+            recs.next(); // the rename's source path
+        }
+        let g = match (x, y) {
+            (b'!', b'!') => FileState::Ignored,
+            (b'?', b'?') => FileState::Added,
+            (b'U', _) | (_, b'U') | (b'A', b'A') | (b'D', b'D') => FileState::Conflict,
+            (b'D', _) | (_, b'D') => FileState::Deleted,
+            (b'A', _) => FileState::Added,
+            _ => FileState::Modified,
+        };
+        let path = top.join(rel.trim_end_matches('/'));
+        if rel.ends_with('/') {
+            st.trees.insert(path.clone(), g);
+        } else {
+            st.paths.insert(path.clone(), g);
+        }
+        if g == FileState::Ignored {
+            continue;
+        }
+        for a in path.ancestors().skip(1).take_while(|a| a.starts_with(&top)) {
+            let e = st.paths.entry(a.to_path_buf()).or_insert(g);
+            *e = (*e).max(g);
+        }
+    }
+    st
 }

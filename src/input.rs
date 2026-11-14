@@ -7,6 +7,22 @@ fn modnum(m: M) -> u8 {
     1 + m.shift_key() as u8 + 2 * m.alt_key() as u8 + 4 * m.control_key() as u8
 }
 
+/// The named key (arrows, Enter, …), if it is one.
+pub fn named(k: &KeyEvent) -> Option<NamedKey> {
+    match &k.logical_key {
+        Key::Named(n) => Some(*n),
+        _ => None,
+    }
+}
+
+/// The first character the key produces, with all modifiers applied.
+pub fn char(k: &KeyEvent) -> Option<char> {
+    match &k.logical_key {
+        Key::Character(s) => s.chars().next(),
+        _ => None,
+    }
+}
+
 /// The key's character ignoring Ctrl/Alt (Option on macOS), keeping Shift.
 pub fn base_char(k: &KeyEvent, m: M) -> Option<char> {
     let c = match k.key_without_modifiers() {

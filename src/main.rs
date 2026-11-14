@@ -1,13 +1,17 @@
 mod api;
 mod app;
 mod config;
+mod files;
 mod git;
 mod gpu;
+mod icons;
 mod input;
+mod platform;
 mod pty;
 mod term;
 mod text;
 mod ui;
+mod util;
 mod watch;
 
 use app::{App, Ev};
@@ -29,6 +33,7 @@ usage:
   pmux read <pane> [n]      last n lines of a pane's screen
   pmux send <pane> <text>   type text + Enter into a pane
   pmux new [cmd...]         open a pane next to this one (optionally run cmd)
+  pmux new --tab [cmd...]   open a pane in a new tab of this worktree
   pmux status <state>       set my state: working|waiting|idle|done|error|clear
   pmux title <text>         set my title
   pmux ws new <name>                   add a workspace
@@ -136,8 +141,8 @@ impl ApplicationHandler<Ev> for Runner {
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, ev: WindowEvent) {
         let Some(app) = self.app.as_mut() else { return };
         match ev {
-            WindowEvent::CloseRequested => return self.shutdown(el),
-            WindowEvent::RedrawRequested => return self.redraw(),
+            WindowEvent::CloseRequested => self.shutdown(el),
+            WindowEvent::RedrawRequested => self.redraw(),
             WindowEvent::Resized(s) => {
                 app.w = s.width as f32;
                 app.h = s.height as f32;

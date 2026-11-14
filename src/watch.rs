@@ -1,4 +1,4 @@
-//! File watching for git metadata. macOS: kqueue, fully event-driven (no polling).
+//! File watching (git metadata, explorer folders). macOS: kqueue, fully event-driven (no polling).
 use crate::app::{Ev, Tx};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -16,7 +16,8 @@ fn kev(ident: usize, filter: i16, flags: u16, fflags: u32) -> libc::kevent {
 
 impl Watcher {
     #[cfg(target_os = "macos")]
-    pub fn new(tx: Tx) -> Self {
+    /// Watch paths set with `set`; each change sends `ev()`.
+    pub fn new(tx: Tx, ev: fn() -> Ev) -> Self {
         use std::os::unix::ffi::OsStrExt;
         let paths: Arc<Mutex<Vec<PathBuf>>> = Arc::default();
         let kq = unsafe { libc::kqueue() };
@@ -51,7 +52,7 @@ impl Watcher {
                     unsafe { libc::kevent(kq, &e, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
                     fds.push(fd);
                 }
-                if changed && tx.send_event(Ev::Git).is_err() {
+                if changed && tx.send_event(ev()).is_err() {
                     return;
                 }
             }
@@ -60,11 +61,11 @@ impl Watcher {
     }
 
     #[cfg(not(target_os = "macos"))]
-    pub fn new(tx: Tx) -> Self {
+    pub fn new(tx: Tx, ev: fn() -> Ev) -> Self {
         // Prototype fallback: coarse poll. Linux will use inotify.
         std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(3));
-            if tx.send_event(Ev::Git).is_err() {
+            if tx.send_event(ev()).is_err() {
                 return;
             }
         });

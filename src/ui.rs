@@ -1,7 +1,9 @@
-//! Build one frame's draw list: sidebar, pane headers, terminal grids, status bar.
-use crate::app::{proj_key, ws_key, App, Row, R, ROW_H, ROW_INSET, SB_TOP};
+//! Build one frame's draw list: sidebar, tabs, terminal grids, file explorer, status bar, menu.
+use crate::app::{proj_key, subtree_end, ws_key, Action, App, Focus, Pane, Row, State, TabHit, Tree, TreeRow, R};
+use crate::git::FileState;
 use crate::gpu::{Inst, COLOR, MASK, RECT};
-use crate::text::Fonts;
+use crate::icons::{self, Icon};
+use crate::text::{Fonts, Glyph};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
@@ -82,14 +84,25 @@ fn to_c(c: Rgb) -> C {
     rgb(c.r, c.g, c.b)
 }
 
-fn state_color(s: Option<&str>) -> C {
+fn state_color(s: Option<State>) -> C {
     match s {
-        Some("working") => rgb(0xf5, 0xa5, 0x24),
-        Some("waiting") | Some("error") => rgb(0xef, 0x5b, 0x5b),
-        Some("idle") | Some("done") => rgb(0x4c, 0xc2, 0x6a),
-        _ => FAINT,
+        Some(State::Working) => rgb(0xf5, 0xa5, 0x24),
+        Some(State::Waiting | State::Error) => rgb(0xef, 0x5b, 0x5b),
+        Some(State::Idle | State::Done) => rgb(0x4c, 0xc2, 0x6a),
+        None => FAINT,
     }
 }
+
+fn git_color(g: FileState) -> C {
+    match g {
+        FileState::Modified => rgb(0xe5, 0xc0, 0x7b),
+        FileState::Added => rgb(0x98, 0xc3, 0x79),
+        FileState::Deleted => BEHIND,
+        FileState::Conflict => DANGER,
+        FileState::Ignored => FAINT,
+    }
+}
+
 
 pub struct Painter<'a> {
     pub out: Vec<Inst>,
@@ -97,30 +110,30 @@ pub struct Painter<'a> {
 }
 
 impl Painter<'_> {
-    pub fn rect(&mut self, r: R, color: C, radius: f32) {
+    pub fn rect(&mut self, r: R, color: C) {
         if r.w <= 0.0 || r.h <= 0.0 {
             return;
         }
-        self.out.push(Inst { rect: [r.x, r.y, r.w, r.h], uv: [0.0; 4], color, misc: [RECT, radius, 0.0, 0.0] });
+        self.out.push(Inst { rect: [r.x, r.y, r.w, r.h], uv: [0.0; 4], color, misc: [RECT, 0.0, 0.0, 0.0] });
     }
 
-    fn glyph(&mut self, g: crate::text::Glyph, x: f32, y: f32, color: C) {
+    fn glyph(&mut self, g: Glyph, x: f32, y: f32, color: C) {
         let rect = [x + g.left as f32, y - g.top as f32, g.uv[2], g.uv[3]];
         self.out.push(Inst { rect, uv: g.uv, color, misc: [if g.color { COLOR } else { MASK }, 0.0, 0.0, 0.0] });
     }
 
-    /// Draw text vertically centered in `[y, y+h)`, clipped with an ellipsis at `max_w`. Returns width drawn.
-    pub fn text(&mut self, s: &str, x: f32, y: f32, h: f32, pt: f32, color: C, bold: bool, max_w: f32) -> f32 {
-        if max_w <= 0.0 || s.is_empty() {
+    /// Draw text from `r.x`, vertically centered in `r`, clipped with an ellipsis at `r.w`. Returns width drawn.
+    pub fn text(&mut self, s: &str, r: R, pt: f32, color: C, bold: bool) -> f32 {
+        if r.w <= 0.0 || s.is_empty() {
             return 0.0;
         }
         let sh = self.fonts.ui(s, pt, bold, false);
         let lh = self.fonts.line_h(pt);
-        let base = (y + ((h - lh) / 2.0).round() + sh.ascent.round()).round();
-        let x = x.round();
-        let clip = sh.width > max_w;
+        let base = (r.y + ((r.h - lh) / 2.0).round() + sh.ascent.round()).round();
+        let x = r.x.round();
+        let clip = sh.width > r.w;
         let ell = if clip { self.fonts.ui("…", pt, bold, false) } else { sh.clone() };
-        let limit = if clip { max_w - ell.width } else { f32::MAX };
+        let limit = if clip { r.w - ell.width } else { f32::MAX };
         let mut end = 0.0;
         for &(key, gx, gy, adv) in &sh.glyphs {
             if adv > limit {
@@ -131,28 +144,52 @@ impl Painter<'_> {
             }
             end = adv;
         }
-        if clip {
-            for &(key, gx, gy, _) in &ell.glyphs {
-                if let Some(g) = self.fonts.glyph(key) {
-                    self.glyph(g, x + end + gx as f32, base + gy as f32, color);
-                }
-            }
-            return end + ell.width;
+        if !clip {
+            return sh.width;
         }
-        sh.width
+        for &(key, gx, gy, _) in &ell.glyphs {
+            if let Some(g) = self.fonts.glyph(key) {
+                self.glyph(g, x + end + gx as f32, base + gy as f32, color);
+            }
+        }
+        end + ell.width
+    }
+
+    /// Text centered in `r` (button labels, notices).
+    fn text_centered(&mut self, s: &str, r: R, pt: f32, color: C) {
+        let w = self.measure(s, pt, false);
+        self.text(s, R { x: r.x + (r.w - w) / 2.0, ..r }, pt, color, false);
+    }
+
+    /// Text ending at `right`, never clipped. Returns its left edge.
+    fn text_right(&mut self, s: &str, right: f32, r: R, pt: f32, color: C, bold: bool) -> f32 {
+        let w = self.measure(s, pt, bold);
+        self.text(s, R { x: right - w, w: w + 1.0, ..r }, pt, color, bold);
+        right - w
     }
 
     pub fn measure(&mut self, s: &str, pt: f32, bold: bool) -> f32 {
         self.fonts.ui(s, pt, bold, false).width
     }
 
-    /// Draw an icon mask from its top-left corner.
-    fn icon(&mut self, g: crate::text::Glyph, x: f32, y: f32, color: C) {
-        self.out.push(Inst { rect: [x.round(), y.round(), g.uv[2], g.uv[3]], uv: g.uv, color, misc: [MASK, 0.0, 0.0, 0.0] });
+    /// Draw an icon centered in `r`.
+    fn icon(&mut self, icon: &'static Icon, r: R, color: C) {
+        let Some(g) = self.fonts.icon(icon, crate::app::ICON_PT) else { return };
+        let b = r.center(g.uv[2], g.uv[3]);
+        self.out.push(Inst { rect: [b.x, b.y, b.w, b.h], uv: g.uv, color, misc: [MASK, 0.0, 0.0, 0.0] });
     }
 
     fn dot(&mut self, cx: f32, cy: f32, d: f32, color: C) {
-        self.rect(R { x: (cx - d / 2.0).round(), y: (cy - d / 2.0).round(), w: d, h: d }, color, d / 2.0);
+        let (x, y) = ((cx - d / 2.0).round(), (cy - d / 2.0).round());
+        self.out.push(Inst { rect: [x, y, d, d], uv: [0.0; 4], color, misc: [RECT, d / 2.0, 0.0, 0.0] });
+    }
+
+    /// A 1px outline inside `r`.
+    fn outline(&mut self, r: R, t: f32, color: C) {
+        self.rect(R { h: t, ..r }, color);
+        self.rect(R { y: r.y + r.h - t, h: t, ..r }, color);
+        self.rect(R { w: t, ..r }, color);
+        self.rect(R { x: r.x + r.w - t, w: t, ..r }, color);
     }
 }
 
@@ -162,189 +199,304 @@ pub fn frame(app: &App, fonts: &mut Fonts) -> Vec<Inst> {
         sidebar(app, &mut p);
     }
     panes(app, &mut p);
+    tabs(app, &mut p);
+    files(app, &mut p);
     status(app, &mut p);
     menu(app, &mut p);
     p.out
 }
 
-/// Sidebar laid out like Zed's project panel: chevrons, folder/branch icons, indent guide lines.
-fn sidebar(app: &App, p: &mut Painter) {
-    use crate::text::{ICON_BRANCH, ICON_FOLDER, ICON_FOLDER_OPEN};
-    let s = app.scale;
-    let sb = app.sidebar_rect();
-    p.rect(sb, SIDEBAR, 0.0);
-    p.rect(R { x: sb.w - s.floor().max(1.0), w: s.floor().max(1.0), ..sb }, BORDER, 0.0);
+/// Panel background and its border on the side facing the panes.
+fn panel(app: &App, p: &mut Painter, r: R, border_right: bool) {
+    let line = app.hairline();
+    p.rect(r, SIDEBAR);
+    p.rect(R { x: if border_right { r.x + r.w - line } else { r.x }, w: line, ..r }, BORDER);
+}
 
-    let rows = app.rows();
-    let sel = app.sel.min(rows.len().saturating_sub(1));
-    let top = app.sidebar_top(rows.len());
-    let vis = app.sidebar_visible_rows();
-    let rh = app.px(ROW_H);
-    let inset = app.px(ROW_INSET);
-    let row_y = |i: usize| app.px(SB_TOP) + (i as f32 - top as f32) * rh;
-    let current_row = rows.iter().position(|r| app.row_view(*r).is_some() && app.row_view(*r) == app.current);
+/// Panel title header, with a bottom border like the tab bar's.
+fn panel_header(app: &App, p: &mut Painter, r: R, title: &str) {
+    if r.h <= 0.0 {
+        return;
+    }
+    let line = app.hairline();
+    p.rect(R { y: r.y + r.h - line, h: line, ..r }, BORDER);
+    let pad = app.px(12.0);
+    p.text(title, R { x: r.x + pad, w: (r.w - 2.0 * pad).max(0.0), h: r.h - line, ..r }, 12.0, MUTED, true);
+}
 
-    // Row backgrounds.
-    for i in top..(top + vis).min(rows.len()) {
-        let r = R { x: inset, y: row_y(i), w: sb.w - 2.0 * inset, h: rh };
-        let bg = if app.sidebar_focus && i == sel {
-            Some(SELECT)
-        } else if Some(i) == current_row {
-            Some(HEADER_FOCUS)
-        } else if app.hover == Some(i) {
-            Some(HOVER)
-        } else {
-            None
-        };
-        if let Some(c) = bg {
-            p.rect(r, c, app.px(4.0));
+/// Row highlight, strongest first: selected in the focused panel, current (open / selected
+/// elsewhere), hovered.
+fn row_bg(selected: bool, current: bool, hover: bool) -> Option<C> {
+    if selected {
+        Some(SELECT)
+    } else if current {
+        Some(HEADER_FOCUS)
+    } else if hover {
+        Some(HOVER)
+    } else {
+        None
+    }
+}
+
+/// What a tree row shows. Folders show open/closed folder icons; there are no chevrons.
+struct RowLook {
+    icon: &'static Icon,
+    icon_color: C,
+    label: String,
+    label_color: C,
+    bold: bool,
+    /// The label is clipped here (right-aligned extras sit after it).
+    label_end: f32,
+}
+
+/// Draw a tree panel (sidebar or explorer), in passes: row backgrounds, indent guides, rows.
+/// `levels[i]` is row i's nesting; `bg(i)` its highlight; `active(parent)` whether a guide is
+/// highlighted. `row` draws a row's right-aligned extras and says what the row shows.
+fn draw_tree(
+    app: &App,
+    p: &mut Painter,
+    tree: Tree,
+    levels: &[usize],
+    bg: impl Fn(usize) -> Option<C>,
+    active: impl Fn(usize) -> bool,
+    mut row: impl FnMut(&mut Painter, usize, &TreeRow) -> RowLook,
+) {
+    for i in tree.visible() {
+        if let Some(c) = bg(i) {
+            p.rect(tree.row(levels[i], i).bg, c);
         }
     }
 
-    // Indent guides: one line under each open parent's chevron, spanning its children.
-    let (clip_top, clip_bot) = (app.px(SB_TOP), app.sidebar_rect().h);
-    let line = s.floor().max(1.0);
-    for (i, row) in rows.iter().enumerate() {
-        let lv = App::level(*row);
-        let end = rows[i + 1..].iter().position(|r| App::level(*r) <= lv).map_or(rows.len(), |k| i + 1 + k);
-        if end == i + 1 {
-            continue;
+    // Indent guides, one pass: a stack of parents; a parent's guide runs through its icon slot
+    // and ends at the first row not nested in it.
+    let vis = tree.visible();
+    let guide = |p: &mut Painter, start: usize, stop: usize| {
+        if stop <= start + 1 || stop <= vis.start || start >= vis.end {
+            return;
         }
-        let active = current_row.is_some_and(|c| c > i && c < end);
-        let cr = app.chevron_rect(lv, 0.0);
-        let x = (cr.x + cr.w / 2.0).floor();
-        let y0 = (row_y(i + 1) + app.px(2.0)).max(clip_top);
-        let y1 = (row_y(end) - app.px(2.0)).min(clip_bot);
+        let slot = tree.row(levels[start], start).icon;
+        let x = (slot.x + slot.w / 2.0).floor();
+        let y0 = (tree.y(start + 1) + app.px(2.0)).max(tree.area.y);
+        let y1 = (tree.y(stop) - app.px(2.0)).min(tree.area.y + tree.area.h);
         if y1 > y0 {
-            p.rect(R { x, y: y0, w: line, h: y1 - y0 }, if active { GUIDE_ACTIVE } else { GUIDE }, 0.0);
+            p.rect(R { x, y: y0, w: app.hairline(), h: y1 - y0 }, if active(start) { GUIDE_ACTIVE } else { GUIDE });
         }
+    };
+    let mut stack: Vec<usize> = Vec::new();
+    for (i, lv) in levels.iter().enumerate() {
+        while let Some(s) = stack.pop_if(|s| levels[*s] >= *lv) {
+            guide(p, s, i);
+        }
+        stack.push(i);
+    }
+    while let Some(s) = stack.pop() {
+        guide(p, s, levels.len());
     }
 
-    for (i, row) in rows.iter().enumerate().skip(top).take(vis) {
-        let y = row_y(i);
-        let r = R { x: inset, y, w: sb.w - 2.0 * inset, h: rh };
+    for i in tree.visible() {
+        let t = tree.row(levels[i], i);
+        let look = row(p, i, &t);
+        p.icon(look.icon, t.icon, look.icon_color);
+        p.text(&look.label, R { x: t.text_x, w: look.label_end - t.text_x, ..t.bg }, 13.0, look.label_color, look.bold);
+    }
+}
+
+/// Sidebar: workspaces → projects → worktrees, drawn like the explorer (Zed's project panel).
+fn sidebar(app: &App, p: &mut Painter) {
+    panel(app, p, app.sidebar_rect(), true);
+    panel_header(app, p, app.sidebar_header(), "Workspaces");
+    let rows = app.rows();
+    let tree = app.sidebar_tree(rows.len());
+    let levels: Vec<usize> = rows.iter().map(|r| r.level()).collect();
+    let sel = app.sel.min(rows.len().saturating_sub(1));
+    let current_row = rows.iter().position(|r| app.row_view(*r).is_some() && app.row_view(*r) == app.current);
+    let selected = |i: usize| app.focus == Focus::Sidebar && i == sel;
+    let bg = |i: usize| row_bg(selected(i), Some(i) == current_row, app.hover == Some(i));
+    let active = |start: usize| current_row.is_some_and(|c| c > start && c < subtree_end(&rows, start));
+
+    draw_tree(app, p, tree, &levels, bg, active, |p, i, t| {
         let current = Some(i) == current_row;
-        let lv = App::level(*row);
-        // (label, icon, fg, bold, panes rolled into this row). Folders show open/closed instead of a chevron.
         let mut behind_of: Option<&std::path::Path> = None;
-        let (label, icon, mut fg, bold, panes): (String, &'static crate::text::Icon, C, bool, Vec<u32>) = match *row {
+        let (label, icon, fg, bold, panes): (String, &'static Icon, C, bool, Vec<u32>) = match rows[i] {
             Row::Ws(wi) => {
                 let ws = &app.workspaces[wi];
                 let folded = app.folded.contains(&ws_key(&ws.name));
+                // Folded: its panes roll up into this row.
                 let panes = if folded { app.panes.values().filter(|pn| app.names(&pn.view).0 == ws.name).map(|pn| pn.id).collect() } else { vec![] };
                 let open = !folded && !ws.projects.is_empty();
-                (ws.name.clone(), if open { &ICON_FOLDER_OPEN } else { &ICON_FOLDER }, TEXT, true, panes)
+                (ws.name.clone(), folder(open), TEXT, true, panes)
             }
             Row::Proj(wi, pi) => {
                 let pr = &app.workspaces[wi].projects[pi];
                 let folded = app.folded.contains(&proj_key(&pr.path));
                 let main_listed = pr.listed().any(|(_, w)| w.main);
                 let panes: Vec<u32> = if folded {
-                    pr.view_paths().iter().flat_map(|v| app.panes_in(v).to_vec()).collect()
+                    pr.view_paths().iter().flat_map(|v| app.panes_in(v)).collect()
                 } else if main_listed {
                     vec![]
                 } else {
-                    app.panes_in(&pr.path).to_vec()
+                    app.panes_in(&pr.path)
                 };
-                let open = pr.has_linked() && !folded;
                 if !main_listed {
                     behind_of = Some(&pr.path);
                 }
-                (pr.name.clone(), if open { &ICON_FOLDER_OPEN } else { &ICON_FOLDER }, TEXT, false, panes)
+                (pr.name.clone(), folder(pr.has_linked() && !folded), TEXT, false, panes)
             }
             Row::Wt(wi, pi, ti) => {
-                let t = &app.workspaces[wi].projects[pi].worktrees.as_ref().unwrap()[ti];
-                let fg = if app.panes_in(&t.path).is_empty() { MUTED } else { TEXT };
-                behind_of = Some(&t.path);
-                (t.branch.clone(), &ICON_BRANCH, fg, false, app.panes_in(&t.path).to_vec())
+                let w = &app.workspaces[wi].projects[pi].worktrees.as_ref().expect("row has worktrees")[ti];
+                let panes = app.panes_in(&w.path);
+                behind_of = Some(&w.path);
+                (w.branch.clone(), &icons::BRANCH, if panes.is_empty() { MUTED } else { TEXT }, false, panes)
             }
         };
-        if current {
-            fg = ACCENT;
-        }
-        let cr = app.chevron_rect(lv, y);
-        let icon_sz = 14.0;
-        let d = app.px(icon_sz);
-        let mid = |h: f32| y + ((rh - h) / 2.0).round();
-        // Icon sits in the level's box, centered over the guide line of its children.
-        if let Some(g) = p.fonts.icon(icon, icon_sz) {
-            p.icon(g, cr.x + ((cr.w - d) / 2.0).round(), mid(d), if current { ACCENT } else { MUTED });
-        }
-        let x = cr.x + cr.w + app.px(6.0);
+        let r = t.bg;
         // State dots on the right.
-        let mut ps: Vec<_> = panes.iter().map(|id| &app.panes[id]).collect();
+        let mut ps: Vec<&Pane> = panes.iter().map(|id| &app.panes[id]).collect();
         ps.sort_by_key(|pn| pn.id);
         let n = ps.len().min(6);
-        let dd = app.px(7.0);
-        let gap = app.px(5.0);
+        let (dd, gap) = (app.px(7.0), app.px(5.0));
         let dots_w = n as f32 * (dd + gap);
-        let right = r.x + r.w - app.px(8.0);
-        for (k, pn) in ps.iter().take(6).enumerate() {
-            let cx = right - dots_w + k as f32 * (dd + gap) + dd / 2.0 + gap;
-            p.dot(cx, y + rh / 2.0, dd, state_color(pn.state()));
+        for (k, pn) in ps.iter().take(n).enumerate() {
+            let cx = t.right - dots_w + k as f32 * (dd + gap) + dd / 2.0 + gap;
+            p.dot(cx, r.y + r.h / 2.0, dd, state_color(pn.state()));
         }
-        let mut label_end = right - dots_w - app.px(4.0);
+        let mut label_end = t.right - dots_w - app.px(4.0);
         // Behind upstream: red ↓N, left of the dots.
         if let Some(n) = behind_of.and_then(|v| app.behind.get(v)) {
-            let t = format!("\u{2193}{n}");
-            let w = p.measure(&t, 11.5, false);
-            let bx = label_end - w;
-            p.text(&t, bx, y, rh, 11.5, BEHIND, false, w + 1.0);
-            label_end = bx - app.px(6.0);
+            label_end = p.text_right(&format!("\u{2193}{n}"), label_end, r, 11.5, BEHIND, false) - app.px(6.0);
         }
-        // Hover on a workspace: a + (add project) replaces the state dots. Everything else is in the right-click menu.
-        if app.hover == Some(i) && matches!(row, Row::Ws(_)) && app.menu.is_none() {
-            let row_bg = if app.sidebar_focus && i == sel { SELECT } else if current { HEADER_FOCUS } else { HOVER };
-            let btns = vec![(app.plus_button(y), "+", 2u8)];
-            let left = btns.last().unwrap().0.x;
-            p.rect(R { x: left - app.px(6.0), w: r.x + r.w - left + app.px(6.0), ..r }, row_bg, app.px(4.0));
-            for (b, g, id) in btns {
-                let on = app.hover_btn == id;
-                if on {
-                    p.rect(b, BORDER, app.px(4.0));
-                }
-                let w = p.measure(g, 14.0, false);
-                p.text(g, b.x + (b.w - w) / 2.0, b.y, b.h, 14.0, if on { TEXT } else { MUTED }, false, b.w);
-            }
-            label_end = left - app.px(6.0);
-        }
-        p.text(&label, x, y, rh, 13.0, fg, bold || current, label_end - x);
-    }
+        RowLook { icon, icon_color: if current { ACCENT } else { MUTED }, label, label_color: if current { ACCENT } else { fg }, bold: bold || current, label_end }
+    });
 
     // Reorder drag: the dragged row stays highlighted; a line marks where it lands.
     if let Some(d) = app.drag.as_ref().filter(|d| d.active) {
-        if let Some(i) = rows.iter().position(|r| *r == d.row).filter(|i| (top..top + vis).contains(i)) {
-            p.rect(R { x: inset, y: row_y(i), w: sb.w - 2.0 * inset, h: rh }, DRAG_TINT, app.px(4.0));
+        if let Some(i) = rows.iter().position(|r| *r == d.row).filter(|i| tree.visible().contains(i)) {
+            p.rect(tree.row(d.row.level(), i).bg, DRAG_TINT);
         }
         if let Some((_, b, lv)) = d.target {
             let th = app.px(2.0);
-            let y = (row_y(b) - th / 2.0).clamp(clip_top, clip_bot - th);
-            let x0 = app.chevron_rect(lv, 0.0).x;
-            p.rect(R { x: x0, y, w: sb.w - inset - x0, h: th }, ACCENT, th / 2.0);
+            let y = (tree.y(b) - th / 2.0).clamp(tree.area.y, tree.area.y + tree.area.h - th);
+            let t = tree.row(lv, b);
+            p.rect(R { x: t.icon.x, y, w: t.bg.x + t.bg.w - t.icon.x, h: th }, ACCENT);
         }
     }
+}
+
+fn folder(open: bool) -> &'static Icon {
+    if open {
+        &icons::FOLDER_OPEN
+    } else {
+        &icons::FOLDER
+    }
+}
+
+/// File explorer on the right: the same tree as the sidebar, with file-type icons and git status colors.
+fn files(app: &App, p: &mut Painter) {
+    let fr = app.files_rect();
+    let Some(e) = app.explorer().filter(|_| fr.w > 0.0) else { return };
+    panel(app, p, fr, false);
+    panel_header(app, p, app.files_header(), "Files");
+    let levels: Vec<usize> = e.entries.iter().map(|en| en.depth).collect();
+    let focused = app.focus == Focus::Files;
+    let bg = |i: usize| row_bg(i == e.sel && focused, i == e.sel, app.files_hover == Some(i));
+    let active_parent = e.parent(e.sel);
+    draw_tree(app, p, app.files_tree(), &levels, bg, |start| active_parent == Some(start), |_, i, t| {
+        let en = &e.entries[i];
+        let git = e.git(&en.path);
+        RowLook {
+            icon: if en.dir { folder(e.open.contains(&en.path)) } else { icons::files::for_name(&en.name) },
+            icon_color: if git == Some(FileState::Ignored) { FAINT } else { MUTED },
+            label: en.name.clone(),
+            label_color: git.map_or(TEXT, git_color),
+            bold: en.depth == 0,
+            label_end: t.right,
+        }
+    });
+}
+
+/// Shell titles are usually `user@host:~/dir`: the dir is the useful part.
+fn short_title(label: String) -> String {
+    match label.split_once(':') {
+        Some((uh, rest)) if uh.contains('@') && !uh.contains(' ') && !rest.is_empty() => rest.trim().to_string(),
+        _ => label,
+    }
+}
+
+/// Tab strip over the panes: one tab per pane group, labelled by its focused pane, + at the end.
+fn tabs(app: &App, p: &mut Painter) {
+    let bar = app.tab_bar();
+    let Some(v) = app.current_view() else { return };
+    if bar.h <= 0.0 {
+        return;
+    }
+    let line = app.hairline();
+    p.rect(bar, SIDEBAR);
+    p.rect(R { y: bar.y + bar.h - line, h: line, ..bar }, BORDER);
+    let (rects, plus) = app.tab_rects();
+    for (i, (t, (r, close))) in v.tabs.iter().zip(rects).enumerate() {
+        let shown = i == v.tab;
+        let hover = app.tab_hover.and_then(TabHit::tab) == Some(i);
+        if shown {
+            // The shown tab joins the pane area: pane background, no bottom border, accent on top.
+            p.rect(r, BG);
+            p.rect(R { h: app.px(2.0), ..r }, ACCENT);
+        } else if hover {
+            p.rect(R { h: r.h - line, ..r }, HOVER);
+        }
+        p.rect(R { x: r.x + r.w - line, w: line, h: r.h - if shown { 0.0 } else { line }, ..r }, BORDER);
+        let label = t.panes.get(t.focus).and_then(|id| app.panes.get(id)).map(|pn| short_title(pn.label())).unwrap_or_default();
+        let mut x = r.x + app.px(12.0);
+        // State dot when any pane in the tab reports one (most urgent first).
+        if let Some(st) = t.panes.iter().filter_map(|id| app.panes.get(id)?.state()).max() {
+            let dd = app.px(7.0);
+            p.dot(x + dd / 2.0, r.y + r.h / 2.0, dd, state_color(Some(st)));
+            x += dd + app.px(7.0);
+        }
+        let mut right = if hover || shown { close.x - app.px(4.0) } else { r.x + r.w - app.px(10.0) };
+        // Split tab: pane count at the right end.
+        if t.panes.len() > 1 {
+            let n = t.panes.len().to_string();
+            let nw = p.measure(&n, 11.0, false) + app.px(10.0);
+            let nr = R { x: right - nw, w: nw, ..r.center(nw, app.px(16.0)) };
+            p.rect(nr, BORDER);
+            p.text(&n, R { x: nr.x + app.px(5.0), ..nr }, 11.0, MUTED, false);
+            right = nr.x - app.px(6.0);
+        }
+        p.text(&label, R { x, w: (right - x).max(0.0), ..r }, 12.0, if shown { TEXT } else { MUTED }, false);
+        if hover || shown {
+            let on = app.tab_hover == Some(TabHit::Close(i));
+            if on {
+                p.rect(close, BORDER);
+            }
+            p.text_centered("×", close, 13.0, if on { TEXT } else { FAINT });
+        }
+    }
+    let on = app.tab_hover == Some(TabHit::New);
+    if on {
+        p.rect(plus, HOVER);
+    }
+    p.text_centered("+", plus, 15.0, if on { TEXT } else { MUTED });
 }
 
 fn panes(app: &App, p: &mut Painter) {
     let area = app.pane_area();
     let layout = app.layout();
-    let focused = app.focused();
     if layout.is_empty() {
         let msg = if app.current.is_some() { "No panes. Press ⌘D to open one." } else { "Pick a worktree in the sidebar." };
-        let w = p.measure(msg, 13.0, false);
-        p.text(msg, area.x + (area.w - w) / 2.0, area.y + area.h / 2.0 - app.px(10.0), app.px(20.0), 13.0, MUTED, false, area.w);
+        p.text_centered(msg, R { y: area.y + area.h / 2.0 - app.px(10.0), h: app.px(20.0), ..area }, 13.0, MUTED);
         return;
     }
-    let sep = app.scale.floor().max(1.0);
+    let focused = app.focused().filter(|_| app.focus == Focus::Panes && app.prompt.is_none());
+    let sep = app.hairline();
     for (i, pr) in layout.iter().enumerate() {
         let pane = &app.panes[&pr.id];
-        let is_focus = Some(pr.id) == focused && !app.sidebar_focus && app.prompt.is_none();
+        let is_focus = Some(pr.id) == focused;
         if i > 0 {
-            p.rect(R { x: pr.header.x - sep, y: area.y, w: sep, h: area.h }, BORDER, 0.0);
+            p.rect(R { x: pr.column.x - sep, w: sep, ..area }, BORDER);
         }
         // No header: with several panes, a thin accent line marks the focused one.
         if is_focus && layout.len() > 1 {
-            p.rect(R { h: app.px(2.0), ..pr.header }, ACCENT, 0.0);
+            p.rect(R { h: app.px(2.0), ..pr.column }, ACCENT);
         }
         // Scrolled back: small badge in the top-right corner.
         let off = pane.vt.display_offset();
@@ -352,22 +504,23 @@ fn panes(app: &App, p: &mut Painter) {
             let s = format!("↑ {off}");
             let w = p.measure(&s, 11.0, false) + app.px(14.0);
             let b = R { x: pr.body.x + pr.body.w - w, y: pr.body.y, w, h: app.px(20.0) };
-            p.rect(b, SELECT, app.px(10.0));
-            p.text(&s, b.x + app.px(7.0), b.y, b.h, 11.0, TEXT, false, w);
+            p.rect(b, SELECT);
+            p.text(&s, R { x: b.x + app.px(7.0), ..b }, 11.0, TEXT, false);
         }
         grid(app, p, pane, pr.body, is_focus);
     }
 }
 
 fn resolve(term: &alacritty_terminal::Term<crate::term::Listener>, c: Color) -> C {
+    let indexed = |i: usize| to_c(term.colors()[i].unwrap_or_else(|| default_color(i)));
     match c {
         Color::Spec(rgb) => to_c(rgb),
-        Color::Indexed(i) => to_c(term.colors()[i as usize].unwrap_or_else(|| default_color(i as usize))),
-        Color::Named(n) => to_c(term.colors()[n as usize].unwrap_or_else(|| default_color(n as usize))),
+        Color::Indexed(i) => indexed(i as usize),
+        Color::Named(n) => indexed(n as usize),
     }
 }
 
-fn grid(app: &App, p: &mut Painter, pane: &crate::app::Pane, body: R, focus: bool) {
+fn grid(app: &App, p: &mut Painter, pane: &Pane, body: R, focus: bool) {
     let term = &pane.vt.term;
     let g = term.grid();
     let (cw, ch) = (app.cell_w, app.cell_h);
@@ -379,6 +532,7 @@ fn grid(app: &App, p: &mut Painter, pane: &crate::app::Pane, body: R, focus: boo
     let mode = *term.mode();
     let cur = g.cursor.point;
     let show_cursor = mode.contains(TermMode::SHOW_CURSOR) && off == 0;
+    let thin = app.scale.max(1.0);
     let mut glyphs: Vec<(char, u8, f32, f32, C)> = Vec::with_capacity(lines * cols);
     for l in 0..lines {
         let row = &g[Line(l as i32 - off)];
@@ -388,15 +542,12 @@ fn grid(app: &App, p: &mut Painter, pane: &crate::app::Pane, body: R, focus: boo
         for c in 0..=cols {
             let bg = (c < cols).then(|| {
                 let cell = &row[Column(c)];
-                let (fg, bg) = (cell.fg, cell.bg);
-                if cell.flags.contains(Flags::INVERSE) { resolve(term, fg) } else { resolve(term, bg) }
+                resolve(term, if cell.flags.contains(Flags::INVERSE) { cell.fg } else { cell.bg })
             });
             let same = matches!((&run, &bg), (Some((_, a)), Some(b)) if a == b);
             if !same {
-                if let Some((start, col)) = run.take() {
-                    if col != default_bg {
-                        p.rect(R { x: body.x + start as f32 * cw, y, w: (c - start) as f32 * cw, h: ch }, col, 0.0);
-                    }
+                if let Some((start, col)) = run.take().filter(|(_, col)| *col != default_bg) {
+                    p.rect(R { x: body.x + start as f32 * cw, y, w: (c - start) as f32 * cw, h: ch }, col);
                 }
                 run = bg.map(|b| (c, b));
             }
@@ -406,16 +557,16 @@ fn grid(app: &App, p: &mut Painter, pane: &crate::app::Pane, body: R, focus: boo
             if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::HIDDEN) {
                 continue;
             }
-            let mut fg = if cell.flags.contains(Flags::INVERSE) { resolve(term, cell.bg) } else { resolve(term, cell.fg) };
+            let mut fg = resolve(term, if cell.flags.contains(Flags::INVERSE) { cell.bg } else { cell.fg });
             if cell.flags.contains(Flags::DIM) {
                 fg = [fg[0] * 0.66, fg[1] * 0.66, fg[2] * 0.66, 1.0];
             }
             let x = body.x + c as f32 * cw;
             if cell.flags.intersects(Flags::ALL_UNDERLINES) {
-                p.rect(R { x, y: y + base + app.px(2.0), w: cw, h: app.scale.max(1.0) }, fg, 0.0);
+                p.rect(R { x, y: y + base + app.px(2.0), w: cw, h: thin }, fg);
             }
             if cell.flags.contains(Flags::STRIKEOUT) {
-                p.rect(R { x, y: y + (ch / 2.0).round(), w: cw, h: app.scale.max(1.0) }, fg, 0.0);
+                p.rect(R { x, y: y + (ch / 2.0).round(), w: cw, h: thin }, fg);
             }
             if cell.c != ' ' && cell.c != '\t' {
                 let style = cell.flags.contains(Flags::BOLD) as u8 | (cell.flags.contains(Flags::ITALIC) as u8) << 1;
@@ -423,20 +574,16 @@ fn grid(app: &App, p: &mut Painter, pane: &crate::app::Pane, body: R, focus: boo
             }
         }
     }
-    // Cursor sits between backgrounds and text.
+    // Cursor sits between backgrounds and text: a block when focused, an outline otherwise.
     let cur_l = cur.line.0;
     let mut cursor_cell = None;
     if show_cursor && cur_l >= 0 && (cur_l as usize) < lines && cur.column.0 < cols {
         let r = R { x: body.x + cur.column.0 as f32 * cw, y: body.y + cur_l as f32 * ch, w: cw, h: ch };
         if focus {
-            p.rect(r, CURSOR, 0.0);
+            p.rect(r, CURSOR);
             cursor_cell = Some((r.x, r.y + base));
         } else {
-            let t = app.scale.max(1.0);
-            p.rect(R { h: t, ..r }, FAINT, 0.0);
-            p.rect(R { y: r.y + r.h - t, h: t, ..r }, FAINT, 0.0);
-            p.rect(R { w: t, ..r }, FAINT, 0.0);
-            p.rect(R { x: r.x + r.w - t, w: t, ..r }, FAINT, 0.0);
+            p.outline(r, thin, FAINT);
         }
     }
     for (c, style, x, y, mut fg) in glyphs {
@@ -455,52 +602,48 @@ fn menu(app: &App, p: &mut Painter) {
     let (w, h) = app.menu_size(&m.items);
     let r = R { x: m.x, y: m.y, w, h };
     // Soft shadow, border, body.
-    p.rect(R { x: r.x - app.px(1.0), y: r.y + app.px(2.0), w: r.w + app.px(2.0), h: r.h + app.px(2.0) }, [0.0, 0.0, 0.0, 0.35], app.px(8.0));
-    p.rect(r, BORDER, app.px(7.0));
-    let b = app.scale.floor().max(1.0);
-    p.rect(R { x: r.x + b, y: r.y + b, w: r.w - 2.0 * b, h: r.h - 2.0 * b }, MENU_BG, app.px(6.0));
+    p.rect(R { x: r.x - app.px(1.0), y: r.y + app.px(2.0), w: r.w + app.px(2.0), h: r.h + app.px(2.0) }, [0.0, 0.0, 0.0, 0.35]);
+    p.rect(r, BORDER);
+    let b = app.hairline();
+    p.rect(r.inset(b), MENU_BG);
     for (i, (ir, (label, a))) in app.menu_rects().into_iter().zip(&m.items).enumerate() {
-        if matches!(a, crate::app::Action::Sep) {
-            p.rect(R { x: ir.x + app.px(4.0), y: ir.y + (ir.h / 2.0).floor(), w: ir.w - app.px(8.0), h: b }, BORDER, 0.0);
+        if matches!(a, Action::Sep) {
+            p.rect(R { x: ir.x + app.px(4.0), y: ir.y + (ir.h / 2.0).floor(), w: ir.w - app.px(8.0), h: b }, BORDER);
             continue;
         }
         if m.hover == Some(i) {
-            p.rect(ir, SELECT, app.px(4.0));
+            p.rect(ir, SELECT);
         }
-        let danger = matches!(a, crate::app::Action::Delete(_));
-        p.text(label, ir.x + app.px(10.0), ir.y, ir.h, 13.0, if danger { DANGER } else { TEXT }, false, ir.w - app.px(20.0));
+        let danger = matches!(a, Action::Delete(_));
+        p.text(label, R { x: ir.x + app.px(10.0), w: ir.w - app.px(20.0), ..ir }, 13.0, if danger { DANGER } else { TEXT }, false);
     }
 }
 
 fn status(app: &App, p: &mut Painter) {
     let r = app.status_rect();
-    p.rect(r, SIDEBAR, 0.0);
-    p.rect(R { h: app.scale.floor().max(1.0), ..r }, BORDER, 0.0);
+    p.rect(r, SIDEBAR);
+    p.rect(R { h: app.hairline(), ..r }, BORDER);
     let x = app.px(14.0);
     if let Some(pr) = &app.prompt {
-        let lw = p.text(&format!("{}:", pr.label), x, r.y, r.h, 12.0, ACCENT, true, r.w);
-        let iw = p.text(&pr.input, x + lw + app.px(8.0), r.y, r.h, 12.0, TEXT, false, r.w);
-        let cx = x + lw + app.px(8.0) + iw + app.px(1.0);
-        p.rect(R { x: cx, y: r.y + app.px(6.0), w: app.px(1.5), h: r.h - app.px(12.0) }, TEXT, 0.0);
-        let hint = "Enter confirm · Esc cancel · Tab complete";
-        let w = p.measure(hint, 12.0, false);
-        p.text(hint, r.w - w - x, r.y, r.h, 12.0, FAINT, false, w + 1.0);
+        let lw = p.text(&format!("{}:", pr.label), R { x, ..r }, 12.0, ACCENT, true);
+        let ix = x + lw + app.px(8.0);
+        let iw = p.text(&pr.input, R { x: ix, ..r }, 12.0, TEXT, false);
+        p.rect(R { x: ix + iw + app.px(1.0), y: r.y + app.px(6.0), w: app.px(1.5), h: r.h - app.px(12.0) }, TEXT);
+        p.text_right("Enter confirm · Esc cancel · Tab complete", r.w - x, r, 12.0, FAINT, false);
         return;
     }
-    let left = match &app.flash {
-        Some((m, t)) if t.elapsed().as_secs() < 4 => m.clone(),
-        _ => String::new(),
-    };
     let right = if app.prefix {
-        "| split · h/l focus · x close · c clear · j/k worktree · n attention · Tab sidebar · b hide · q quit"
-    } else if app.sidebar_focus {
-        "Enter open · right-click for actions · a add project · w worktree · W workspace · D delete worktree · x delete"
+        "| split · t tab · 1-9 tab · h/l focus · x close · c clear · j/k worktree · n attention · Tab sidebar · b hide · q quit"
     } else {
-        "⌘D split · ⌘[ ] focus · ⌘K clear · ⌘E sidebar · ⌘↑↓ worktree · C-a prefix"
+        match app.focus {
+            Focus::Files => "Enter open in $EDITOR · ←→ fold · right-click for actions · Esc back · ⌘⇧E hide",
+            Focus::Sidebar => "Enter open · right-click for actions · a add project · w worktree · W workspace · D delete worktree · x delete",
+            Focus::Panes => "⌘T tab · ⌘⇧[ ] tabs · ⌘D split · ⌘[ ] focus · ⌘K clear · ⌘E sidebar · ⌘⇧E files · ⌘↑↓ worktree · C-a prefix",
+        }
     };
-    let rw = p.measure(right, 12.0, false);
-    let lw = p.text(&left, x, r.y, r.h, 12.0, MUTED, false, r.w - rw - 3.0 * x);
+    let rw = p.measure(right, 12.0, app.prefix);
+    let lw = p.text(app.flash_text().unwrap_or_default(), R { x, w: r.w - rw - 3.0 * x, ..r }, 12.0, MUTED, false);
     if r.w > rw + lw + 3.0 * x {
-        p.text(right, r.w - rw - x, r.y, r.h, 12.0, if app.prefix { ACCENT } else { FAINT }, app.prefix, rw + 1.0);
+        p.text_right(right, r.w - x, r, 12.0, if app.prefix { ACCENT } else { FAINT }, app.prefix);
     }
 }
