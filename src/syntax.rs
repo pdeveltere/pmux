@@ -73,14 +73,8 @@ pub fn lang_for(path: &Path) -> Option<&'static str> {
         "js" | "mjs" | "cjs" | "jsx" => "javascript",
         "ts" | "mts" | "cts" => "typescript",
         "tsx" => "tsx",
-        "py" | "pyi" => "python",
         "sh" | "bash" | "zsh" | ".bashrc" | ".zshrc" | ".profile" | ".envrc" => "bash",
-        "go" => "go",
         "md" | "markdown" => "markdown",
-        "yml" | "yaml" => "yaml",
-        "css" => "css",
-        "html" | "htm" => "html",
-        "c" | "h" => "c",
         _ => return None,
     })
 }
@@ -94,15 +88,9 @@ fn canonical(name: &str) -> Option<&'static str> {
         "javascript" | "js" | "jsx" => "javascript",
         "typescript" | "ts" => "typescript",
         "tsx" => "tsx",
-        "python" | "py" => "python",
         "bash" | "sh" | "shell" | "zsh" | "console" => "bash",
-        "go" | "golang" => "go",
         "markdown" | "md" => "markdown",
         "markdown_inline" => "markdown_inline",
-        "yaml" | "yml" => "yaml",
-        "css" => "css",
-        "html" => "html",
-        "c" => "c",
         _ => return None,
     })
 }
@@ -120,15 +108,9 @@ fn build(name: &'static str) -> Option<HighlightConfiguration> {
         ),
         "typescript" => (tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(), ts_js(), ""),
         "tsx" => (tree_sitter_typescript::LANGUAGE_TSX.into(), format!("{}\n{}", tree_sitter_javascript::JSX_HIGHLIGHT_QUERY, ts_js()), ""),
-        "python" => (tree_sitter_python::LANGUAGE.into(), tree_sitter_python::HIGHLIGHTS_QUERY.into(), ""),
         "bash" => (tree_sitter_bash::LANGUAGE.into(), tree_sitter_bash::HIGHLIGHT_QUERY.into(), ""),
-        "go" => (tree_sitter_go::LANGUAGE.into(), tree_sitter_go::HIGHLIGHTS_QUERY.into(), ""),
         "markdown" => (tree_sitter_md::LANGUAGE.into(), tree_sitter_md::HIGHLIGHT_QUERY_BLOCK.into(), tree_sitter_md::INJECTION_QUERY_BLOCK),
         "markdown_inline" => (tree_sitter_md::INLINE_LANGUAGE.into(), tree_sitter_md::HIGHLIGHT_QUERY_INLINE.into(), tree_sitter_md::INJECTION_QUERY_INLINE),
-        "yaml" => (tree_sitter_yaml::LANGUAGE.into(), tree_sitter_yaml::HIGHLIGHTS_QUERY.into(), ""),
-        "css" => (tree_sitter_css::LANGUAGE.into(), tree_sitter_css::HIGHLIGHTS_QUERY.into(), ""),
-        "html" => (tree_sitter_html::LANGUAGE.into(), tree_sitter_html::HIGHLIGHTS_QUERY.into(), tree_sitter_html::INJECTIONS_QUERY),
-        "c" => (tree_sitter_c::LANGUAGE.into(), tree_sitter_c::HIGHLIGHT_QUERY.into(), ""),
         _ => return None,
     };
     let mut c = HighlightConfiguration::new(lang, name, &hl, inj, "").map_err(|e| eprintln!("pmux: {name} highlights: {e}")).ok()?;
@@ -204,7 +186,7 @@ mod tests {
 
     #[test]
     fn every_language_compiles() {
-        for l in ["rust", "toml", "json", "javascript", "typescript", "tsx", "python", "bash", "go", "markdown", "markdown_inline", "yaml", "css", "html", "c"] {
+        for l in ["rust", "toml", "json", "javascript", "typescript", "tsx", "bash", "markdown", "markdown_inline"] {
             assert!(config(l).is_some(), "{l}");
         }
     }
