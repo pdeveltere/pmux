@@ -70,7 +70,7 @@ impl Runner {
     fn redraw(&mut self) {
         let (Some(app), Some(gpu), Some(fonts)) = (self.app.as_mut(), self.gpu.as_mut(), self.fonts.as_mut()) else { return };
         if let Some(z) = app.zoom.take() {
-            fonts.mono_pt = if z == 0 { 13.0 } else { (fonts.mono_pt + z as f32).clamp(8.0, 32.0) };
+            fonts.mono_pt = if z == 0 { text::MONO_PT } else { (fonts.mono_pt + z as f32).clamp(8.0, 32.0) };
             fonts.reset();
         }
         app.cell_w = fonts.cell_w;

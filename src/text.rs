@@ -62,18 +62,36 @@ fn pick(fs: &FontSystem, names: &[&str]) -> Option<String> {
     names.iter().find(|n| db.faces().any(|f| f.families.iter().any(|(fam, _)| fam == *n))).map(|s| s.to_string())
 }
 
+/// Zed's default fonts (bundled, OFL): Lilex for buffer/terminal, IBM Plex Sans for UI.
+const BUNDLED: &[&[u8]] = &[
+    include_bytes!("../assets/fonts/Lilex-Regular.ttf"),
+    include_bytes!("../assets/fonts/Lilex-Bold.ttf"),
+    include_bytes!("../assets/fonts/Lilex-Italic.ttf"),
+    include_bytes!("../assets/fonts/Lilex-BoldItalic.ttf"),
+    include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf"),
+    include_bytes!("../assets/fonts/IBMPlexSans-SemiBold.ttf"),
+];
+
+/// Zed's default `buffer_font_size` (terminal inherits it).
+pub const MONO_PT: f32 = 15.0;
+/// Zed's `ui_font_size` is 16 and its default label is 0.875rem = 14px; our base label is 13pt.
+const UI_SCALE: f32 = 16.0 * 0.875 / 13.0;
+
 impl Fonts {
     pub fn new(scale: f32) -> Self {
-        let fs = FontSystem::new();
-        let mono = pick(&fs, &["JetBrains Mono", "SF Mono", "Menlo", "DejaVu Sans Mono", "Consolas", "Liberation Mono"]).unwrap_or_else(|| "monospace".into());
-        let ui = pick(&fs, &["Inter", "SF Pro Text", "SF Pro", "Helvetica Neue", "Segoe UI", "Cantarell", "Noto Sans", "DejaVu Sans"]).unwrap_or_else(|| "sans-serif".into());
+        let mut fs = FontSystem::new();
+        for f in BUNDLED {
+            fs.db_mut().load_font_data(f.to_vec());
+        }
+        let mono = pick(&fs, &["Lilex", "JetBrains Mono", "SF Mono", "Menlo", "DejaVu Sans Mono", "Consolas", "Liberation Mono"]).unwrap_or_else(|| "monospace".into());
+        let ui = pick(&fs, &["IBM Plex Sans", "Inter", "SF Pro Text", "SF Pro", "Helvetica Neue", "Segoe UI", "Cantarell", "Noto Sans", "DejaVu Sans"]).unwrap_or_else(|| "sans-serif".into());
         let mut f = Fonts {
             fs,
             swash: SwashCache::new(),
             mono,
             ui,
             scale,
-            mono_pt: 13.0,
+            mono_pt: MONO_PT,
             cell_w: 8.0,
             cell_h: 16.0,
             baseline: 12.0,
@@ -163,7 +181,7 @@ impl Fonts {
     }
 
     pub fn ui(&mut self, s: &str, pt: f32, bold: bool, mono: bool) -> Rc<Shaped> {
-        let px = (pt * self.scale).round();
+        let px = (pt * UI_SCALE * self.scale).round();
         let key = (s.to_string(), px.to_bits(), bold, mono);
         if let Some(r) = self.shaped.get(&key) {
             return r.clone();
@@ -177,7 +195,7 @@ impl Fonts {
     }
 
     pub fn line_h(&self, pt: f32) -> f32 {
-        ((pt * self.scale).round() * 1.3).round()
+        ((pt * UI_SCALE * self.scale).round() * 1.3).round()
     }
 
     /// Rasterize (once) and place in the atlas.
