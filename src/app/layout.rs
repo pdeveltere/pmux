@@ -3,9 +3,10 @@ use super::{Action, App, TabHit};
 
 // Layout, in logical px (multiplied by the scale factor).
 pub const SIDEBAR_W: f32 = 250.0;
-pub const ROW_H: f32 = 24.0;
-/// Tree indent per level (Zed's project panel uses 20).
-pub const INDENT: f32 = 16.0;
+/// Tree row: Zed's "comfortable" entry spacing, i.e. one 14px label line at 1.618 line height.
+pub const ROW_H: f32 = 14.0 * 1.618;
+/// Tree indent per level (Zed's project panel `indent_size`).
+pub const INDENT: f32 = 20.0;
 /// UI icon size, in points.
 pub const ICON_PT: f32 = 14.0;
 pub const STATUS_H: f32 = 26.0;
@@ -102,8 +103,9 @@ impl Tree {
     /// Row `i`, at nesting `level`.
     pub fn row(&self, level: usize, i: usize) -> TreeRow {
         let (y, h) = (self.y(i), self.row_h());
-        let icon = R { x: self.area.x + self.px(6.0) + level as f32 * self.px(INDENT), y, w: self.px(16.0), h };
-        TreeRow { bg: R { y, h, ..self.area }, text_x: icon.x + icon.w + self.px(6.0), icon, right: self.area.x + self.area.w - self.px(8.0) }
+        // Zed's list item: 6px side padding, 14px icon, 4px gap to the label.
+        let icon = R { x: self.area.x + self.px(6.0) + level as f32 * self.px(INDENT), y, w: self.px(ICON_PT), h };
+        TreeRow { bg: R { y, h, ..self.area }, text_x: icon.x + icon.w + self.px(4.0), icon, right: self.area.x + self.area.w - self.px(8.0) }
     }
 
     /// Row index at screen y, if there's a row there.
