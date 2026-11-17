@@ -66,6 +66,7 @@ impl App {
     fn update_hover(&mut self, x: f32, y: f32) {
         let (mut hover, mut tab, mut file, mut agent) = (None, None, None, None);
         let mut icon = CursorIcon::Default;
+        let mut link = None;
         if self.prompt.is_none() {
             if self.edge_at(x).is_some() {
                 icon = CursorIcon::ColResize;
@@ -73,6 +74,7 @@ impl App {
                 icon = CursorIcon::RowResize;
             } else if self.files_rect().contains(x, y) {
                 file = self.files_row_at(y);
+                link = self.files_link_at(x, y);
             } else if self.agents_rect().contains(x, y) {
                 agent = self.agent_row_at(y);
             } else if self.sidebar_rect().contains(x, y) {
@@ -84,6 +86,10 @@ impl App {
             if hover.is_some() || file.is_some() || tab.is_some() || agent.is_some() {
                 icon = CursorIcon::Pointer;
             }
+        }
+        if link != self.link_hover.map(|(i, _)| i) {
+            self.link_hover = link.map(|i| (i, std::time::Instant::now()));
+            self.dirty = true;
         }
         if (hover, tab, file, agent) != (self.hover, self.tab_hover, self.files_hover, self.agents_hover) {
             (self.hover, self.tab_hover, self.files_hover, self.agents_hover) = (hover, tab, file, agent);

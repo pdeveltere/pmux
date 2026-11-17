@@ -10,6 +10,8 @@ pub const ROW_H: f32 = 26.0;
 pub const INDENT: f32 = 20.0;
 /// UI icon size, in points.
 pub const ICON_PT: f32 = 14.0;
+/// Symlink arrow size, Zed's indicator icon size.
+pub const LINK_PT: f32 = 10.0;
 /// Status bar height.
 pub const STATUS_H: f32 = 26.0;
 /// Padding between a pane's column and its cell grid.
@@ -370,6 +372,22 @@ impl App {
 
     pub(super) fn files_row_at(&self, y: f32) -> Option<usize> {
         self.files_tree().index_at(y)
+    }
+
+    /// The symlink arrow of explorer row `i` (in `t`), at the row's right end.
+    pub fn files_link_icon(&self, t: &TreeRow) -> R {
+        let w = self.px(LINK_PT);
+        R { x: t.right - w, w, ..t.bg }
+    }
+
+    /// Explorer row whose symlink arrow is under (x, y).
+    pub(super) fn files_link_at(&self, x: f32, y: f32) -> Option<usize> {
+        let e = self.explorer()?;
+        let i = self.files_row_at(y).filter(|i| e.entries[*i].link.is_some())?;
+        let tree = self.files_tree();
+        let r = self.files_link_icon(&tree.row(e.entries[i].depth, i));
+        let pad = self.px(4.0);
+        (x >= r.x - pad && x <= r.x + r.w + pad).then_some(i)
     }
 
     // ---- context menu ----

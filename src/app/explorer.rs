@@ -26,6 +26,7 @@ impl App {
         if self.show_files && self.focus == Focus::Files {
             self.show_files = false;
             self.files_hover = None;
+            self.link_hover = None;
             self.focus_default();
             self.files_rewatch();
             return;

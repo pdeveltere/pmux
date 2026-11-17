@@ -39,6 +39,8 @@ use winit::window::CursorIcon;
 
 /// How long a status message stays in the status bar.
 const FLASH_FOR: Duration = Duration::from_secs(4);
+/// Hover time before a tooltip shows, like Zed's.
+const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
 
 pub enum Ev {
     /// From the background pmux that holds the terminals.
@@ -142,6 +144,8 @@ pub struct App {
     pub show_files: bool,
     pub files_w: f32, // logical px
     pub files_hover: Option<usize>,
+    /// Explorer row whose symlink arrow is hovered, and since when (its tooltip shows after `TOOLTIP_DELAY`).
+    pub link_hover: Option<(usize, Instant)>,
     files_watcher: watch::Watcher,
     /// One `git status` at a time; `status_again` re-runs it when changes arrived meanwhile.
     status_busy: bool,
@@ -231,6 +235,7 @@ impl App {
             show_files: true,
             files_w: FILES_W,
             files_hover: None,
+            link_hover: None,
             status_busy: false,
             status_again: false,
         };
@@ -482,6 +487,11 @@ impl App {
         self.flash = Some((m.into(), Instant::now()));
     }
 
+    /// Explorer row whose symlink tooltip shows, once the arrow has been hovered long enough.
+    pub fn link_tooltip(&self) -> Option<usize> {
+        self.link_hover.filter(|(_, t)| t.elapsed() >= TOOLTIP_DELAY && self.menu.is_none()).map(|(i, _)| i)
+    }
+
     /// The status bar message, while it lasts.
     pub fn flash_text(&self) -> Option<&str> {
         self.flash.as_ref().filter(|(_, t)| t.elapsed() < FLASH_FOR).map(|(m, _)| m.as_str())
@@ -491,6 +501,7 @@ impl App {
     pub fn next_deadline(&self) -> Option<Instant> {
         let now = Instant::now();
         let flash = self.flash.as_ref().map(|(_, t)| *t + FLASH_FOR).filter(|f| *f > now);
-        self.panes.values().filter_map(Pane::state_change_at).chain(flash).chain(self.agents_deadline()).min()
+        let tooltip = self.link_hover.map(|(_, t)| t + TOOLTIP_DELAY).filter(|t| *t > now);
+        self.panes.values().filter_map(Pane::state_change_at).chain(flash).chain(tooltip).chain(self.agents_deadline()).min()
     }
 }

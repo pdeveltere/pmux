@@ -14,6 +14,8 @@ pub struct Entry {
     pub path: PathBuf,
     pub name: String,
     pub dir: bool,
+    /// Where a symbolic link points (resolved when possible); `dir` follows it.
+    pub link: Option<PathBuf>,
     pub depth: usize,
 }
 
@@ -42,7 +44,7 @@ impl Explorer {
     /// Re-read the expanded folders. Keeps the selection on the same path when it still exists.
     pub fn rebuild(&mut self) {
         let keep = self.entries.get(self.sel).map(|e| e.path.clone());
-        let mut out = vec![Entry { path: self.root.clone(), name: util::file_name(&self.root), dir: true, depth: 0 }];
+        let mut out = vec![Entry { path: self.root.clone(), name: util::file_name(&self.root), dir: true, link: None, depth: 0 }];
         if self.open.contains(&self.root) {
             walk(&self.root, 1, &self.open, &mut out);
         }
@@ -96,7 +98,7 @@ impl Explorer {
 
 fn walk(dir: &Path, depth: usize, open: &HashSet<PathBuf>, out: &mut Vec<Entry>) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
-    let mut items: Vec<(String, bool)> = rd
+    let mut items: Vec<(String, bool, Option<PathBuf>)> = rd
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
@@ -104,15 +106,16 @@ fn walk(dir: &Path, depth: usize, open: &HashSet<PathBuf>, out: &mut Vec<Entry>)
                 return None;
             }
             let ft = e.file_type().ok()?;
-            let is_dir = if ft.is_symlink() { e.path().is_dir() } else { ft.is_dir() };
-            Some((name, is_dir))
+            let link = ft.is_symlink().then(|| std::fs::canonicalize(e.path()).or_else(|_| std::fs::read_link(e.path())).unwrap_or_default());
+            let is_dir = if link.is_some() { e.path().is_dir() } else { ft.is_dir() };
+            Some((name, is_dir, link))
         })
         .collect();
     items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())).then_with(|| a.0.cmp(&b.0)));
-    for (name, is_dir) in items {
+    for (name, is_dir, link) in items {
         let path = dir.join(&name);
         let expand = is_dir && open.contains(&path);
-        out.push(Entry { path: path.clone(), name, dir: is_dir, depth });
+        out.push(Entry { path: path.clone(), name, dir: is_dir, link, depth });
         if expand {
             walk(&path, depth + 1, open, out);
         }

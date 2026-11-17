@@ -187,7 +187,12 @@ impl Painter<'_> {
 
     /// Draw an icon centered in `r`.
     fn icon(&mut self, icon: &'static Icon, r: R, color: C) {
-        let Some(g) = self.fonts.icon(icon, crate::app::ICON_PT) else { return };
+        self.icon_pt(icon, r, color, crate::app::ICON_PT);
+    }
+
+    /// An icon at `pt` points, centered in `r`.
+    fn icon_pt(&mut self, icon: &'static Icon, r: R, color: C, pt: f32) {
+        let Some(g) = self.fonts.icon(icon, pt) else { return };
         let b = r.center(g.uv[2], g.uv[3]);
         self.out.push(Inst { rect: [b.x, b.y, b.w, b.h], uv: g.uv, color, misc: [MASK, 0.0, 0.0, 0.0] });
     }
@@ -217,6 +222,7 @@ pub fn frame(app: &App, fonts: &mut Fonts) -> Vec<Inst> {
     status(app, &mut p);
     finder(app, &mut p);
     menu(app, &mut p);
+    link_tooltip(app, &mut p);
     p.out
 }
 
@@ -486,16 +492,24 @@ fn files(app: &App, p: &mut Painter) {
     let focused = app.focus == Focus::Files;
     let bg = |i: usize| row_bg(i == e.sel && focused, i == e.sel, app.files_hover == Some(i));
     let active_parent = e.parent(e.sel);
-    draw_tree(app, p, app.files_tree(), &levels, bg, |start| active_parent == Some(start), |_, i, t| {
+    draw_tree(app, p, app.files_tree(), &levels, bg, |start| active_parent == Some(start), |p, i, t| {
         let en = &e.entries[i];
         let git = e.git(&en.path);
+        let label_color = git.map_or(TEXT, git_color);
+        // Symlinks: Zed's arrow at indicator size on the right, in the label's color.
+        let mut label_end = t.right;
+        if en.link.is_some() {
+            let r = app.files_link_icon(t);
+            p.icon_pt(&icons::ARROW_UP_RIGHT, r, label_color, crate::app::LINK_PT);
+            label_end = r.x - app.px(4.0);
+        }
         RowLook {
             icon: if en.dir { folder(e.open.contains(&en.path)) } else { icons::files::for_name(&en.name) },
             icon_color: if git == Some(FileState::Ignored) { FAINT } else { MUTED },
             label: en.name.clone(),
-            label_color: git.map_or(TEXT, git_color),
+            label_color,
             bold: en.depth == 0,
-            label_end: t.right,
+            label_end,
         }
     });
 }
@@ -921,6 +935,25 @@ fn menu(app: &App, p: &mut Painter) {
         let danger = matches!(a, Action::Delete(_));
         p.text(label, R { x: ir.x + app.px(10.0), w: ir.w - app.px(20.0), ..ir }, 13.0, if danger { DANGER } else { TEXT }, false);
     }
+}
+
+/// Zed's symlink tooltip: the link's target, then "Symbolic Link" muted, below the mouse.
+fn link_tooltip(app: &App, p: &mut Painter) {
+    let Some(target) = app.link_tooltip().and_then(|i| app.explorer()?.entries.get(i)?.link.as_ref()) else { return };
+    let title = target.display().to_string();
+    let (pad, line_h) = (app.px(8.0), app.px(18.0));
+    let w = p.measure(&title, 13.0, false).max(p.measure("Symbolic Link", 12.0, false)) + 2.0 * pad;
+    let h = 2.0 * line_h + 2.0 * app.px(5.0);
+    let (mx, my) = app.mouse;
+    let x = mx.min(app.w - w - app.px(4.0)).max(0.0);
+    let y = if my + app.px(18.0) + h <= app.h { my + app.px(18.0) } else { (my - app.px(6.0) - h).max(0.0) };
+    let r = R { x, y, w, h };
+    p.rect(R { x: r.x - app.px(1.0), y: r.y + app.px(2.0), w: r.w + app.px(2.0), h: r.h + app.px(2.0) }, [0.0, 0.0, 0.0, 0.35]);
+    p.rect(r, BORDER);
+    p.rect(r.inset(app.hairline()), MENU_BG);
+    let row = |k: f32| R { x: r.x + pad, y: r.y + app.px(5.0) + k * line_h, w: r.w - 2.0 * pad + 1.0, h: line_h };
+    p.text(&title, row(0.0), 13.0, TEXT, false);
+    p.text("Symbolic Link", row(1.0), 12.0, MUTED, false);
 }
 
 fn status(app: &App, p: &mut Painter) {

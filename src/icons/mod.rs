@@ -34,6 +34,9 @@ pub static BRANCH: Icon = Icon {
     layers: &[stroke("M4 5.5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0M4 18.5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0M16 7.5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0M6 7.5v9M18 9.5c0 4.5-6.5 3.5-11 7.5", 1.5)],
 };
 
+/// Symlink marker, Zed's arrow_up_right.svg.
+pub static ARROW_UP_RIGHT: Icon = Icon { view: 16.0, layers: &[stroke("M4.5 11.5L11.5 4.5M4.5 4.5L11.5 4.5L11.5 11.5", 1.2)] };
+
 // Folder icons from Zed's assets/icons (folder.svg, folder_open.svg).
 const FOLDER_OPEN_BACK: &str = "M5.46293 7.92298C5.46938 7.6844 5.66427 7.49307 5.90369 7.49307H13.7073C13.9467 7.49307 14.1401 7.6844 14.1335 7.92298C14.1 9.16418 13.9102 12.4787 12.8403 12.4787H4.50925C5.57932 12.4787 5.4293 9.16418 5.46293 7.92298Z";
 
@@ -95,7 +98,7 @@ mod tests {
     #[test]
     fn ui_icons_render() {
         let px = 26;
-        for icon in [&BRANCH, &FOLDER, &FOLDER_OPEN] {
+        for icon in [&BRANCH, &FOLDER, &FOLDER_OPEN, &ARROW_UP_RIGHT] {
             let m = rasterize(icon, px);
             assert_eq!(m.len(), (px * px) as usize);
             ascii(&m, px as usize);
