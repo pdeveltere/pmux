@@ -8,6 +8,10 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 impl App {
     pub fn on_paste(&mut self, s: &str) {
+        if let Some(f) = &mut self.finder {
+            f.query.extend(s.chars().filter(|c| !c.is_control()));
+            return f.update();
+        }
         if let Some(p) = &mut self.prompt {
             p.input.push_str(s.trim());
             return;
@@ -31,6 +35,9 @@ impl App {
         let ch = input::char(k);
         if self.menu.is_some() {
             return self.menu_key(k);
+        }
+        if self.finder.is_some() {
+            return self.finder_key(k, ch);
         }
         // App shortcuts on Cmd (Super).
         if m.super_key() {
@@ -74,6 +81,7 @@ impl App {
     fn cmd_key(&mut self, k: &KeyEvent, ch: Option<char>) {
         match (input::named(k), ch.map(|c| c.to_ascii_lowercase())) {
             (_, Some('k')) => self.clear_focused(),
+            (_, Some('p')) => self.open_finder(),
             (_, Some('v')) => {
                 if let Some(s) = platform::clipboard_get() {
                     self.on_paste(&s);

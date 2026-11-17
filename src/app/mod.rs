@@ -2,10 +2,11 @@
 //!
 //! `App` is one struct; its behaviour is split by concern across the submodules, each adding an
 //! `impl App` block: `layout` (geometry), `pane` (terminals), `sidebar`, `explorer` (file panel),
-//! `edit` (editor panes), `navigate` (tabs/focus), `keys`, `mouse`, `menu`, `commands` (socket API).
+//! `edit` (editor panes), `find` (go to file), `navigate` (tabs/focus), `keys`, `mouse`, `menu`, `commands` (socket API).
 mod commands;
 mod edit;
 mod explorer;
+mod find;
 mod keys;
 mod layout;
 mod menu;
@@ -100,6 +101,10 @@ pub struct App {
     pub snapshot: Option<(String, Sender<Reply>)>,
     /// Open right-click context menu.
     pub menu: Option<Menu>,
+    /// Open "go to file" popup (⌘P).
+    pub finder: Option<crate::finder::Finder>,
+    /// Files opened in editors, most recent first.
+    recent_files: Vec<PathBuf>,
     socket: PathBuf,
     tx: Tx,
     watcher: watch::Watcher,
@@ -164,6 +169,8 @@ impl App {
             quit: false,
             snapshot: None,
             menu: None,
+            finder: None,
+            recent_files: Vec::new(),
             socket,
             watcher: watch::Watcher::new(tx.clone(), || Ev::Git),
             files_watcher: watch::Watcher::new(tx.clone(), || Ev::Fs),

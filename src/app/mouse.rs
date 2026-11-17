@@ -28,6 +28,10 @@ impl App {
             }
             return self.set_cursor(if h.is_some() { CursorIcon::Pointer } else { CursorIcon::Default });
         }
+        if self.finder.is_some() {
+            let on = self.finder_hover(x, y);
+            return self.set_cursor(if on { CursorIcon::Pointer } else { CursorIcon::Default });
+        }
         if let Some(edge) = self.resizing {
             match edge {
                 Edge::Sidebar => self.sidebar_w = self.panel_width(x),
@@ -97,6 +101,9 @@ impl App {
                 self.run_action(m.items[i].1.clone());
             }
             return;
+        }
+        if self.finder.is_some() {
+            return self.finder_click(b, x, y);
         }
         let free = self.prompt.is_none();
         let edge = self.edge_at(x);
@@ -197,6 +204,13 @@ impl App {
         }
         self.wheel_acc -= n as f32;
         self.dirty = true;
+        if self.finder.is_some() {
+            if self.finder_rect().contains(x, y) {
+                self.finder_wheel(-n);
+                self.finder_hover(x, y);
+            }
+            return;
+        }
         if self.files_rect().contains(x, y) {
             self.files_scroll(n);
             return self.on_cursor_moved(x, y);

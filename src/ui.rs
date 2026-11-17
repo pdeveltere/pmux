@@ -206,6 +206,7 @@ pub fn frame(app: &App, fonts: &mut Fonts) -> Vec<Inst> {
     tabs(app, &mut p);
     files(app, &mut p);
     status(app, &mut p);
+    finder(app, &mut p);
     menu(app, &mut p);
     p.out
 }
@@ -494,7 +495,7 @@ fn panes(app: &App, p: &mut Painter) {
         p.text_centered(msg, R { y: area.y + area.h / 2.0 - app.px(10.0), h: app.px(20.0), ..area }, 13.0, MUTED);
         return;
     }
-    let focused = app.focused().filter(|_| app.focus == Focus::Panes && app.prompt.is_none());
+    let focused = app.focused().filter(|_| app.focus == Focus::Panes && app.prompt.is_none() && app.finder.is_none());
     let sep = app.hairline();
     for (i, pr) in layout.iter().enumerate() {
         let pane = &app.panes[&pr.id];
@@ -743,6 +744,81 @@ fn search_bar(app: &App, p: &mut Painter, ed: &crate::editor::Editor, s: &crate:
     p.text(&count, R { x: aa.x + aa.w + app.px(10.0), w: (bar.x + bar.w - aa.x - aa.w - app.px(18.0)).max(0.0), ..field }, 12.0, MUTED, false);
 }
 
+/// Draw `s` from `r.x` with the chars at `hits` (char indices, offset by `from`) in ACCENT.
+/// Returns the width drawn.
+fn highlighted(p: &mut Painter, s: &str, from: usize, hits: &[usize], r: R, pt: f32, color: C) -> f32 {
+    let mut x = r.x;
+    let mut run = String::new();
+    let mut run_hit = false;
+    let flush = |p: &mut Painter, run: &mut String, hit: bool, x: &mut f32| {
+        if !run.is_empty() {
+            *x += p.text(run, R { x: *x, w: (r.x + r.w - *x).max(0.0), ..r }, pt, if hit { ACCENT } else { color }, false);
+            run.clear();
+        }
+    };
+    for (i, c) in s.chars().enumerate() {
+        let hit = hits.contains(&(from + i));
+        if hit != run_hit {
+            flush(p, &mut run, run_hit, &mut x);
+            run_hit = hit;
+        }
+        run.push(c);
+    }
+    flush(p, &mut run, run_hit, &mut x);
+    x - r.x
+}
+
+/// "Go to file" popup (⌘P), like Zed's file finder: query on top, matches below.
+fn finder(app: &App, p: &mut Painter) {
+    let Some(f) = &app.finder else { return };
+    let r = app.finder_rect();
+    let b = app.hairline();
+    p.rect(R { x: r.x - app.px(2.0), y: r.y + app.px(4.0), w: r.w + app.px(4.0), h: r.h + app.px(4.0) }, [0.0, 0.0, 0.0, 0.35]);
+    p.rect(r, BORDER);
+    p.rect(r.inset(b), MENU_BG);
+
+    let input = app.finder_input();
+    p.rect(R { y: input.y + input.h, h: b, ..input }, BORDER);
+    let pad = app.px(12.0);
+    let ir = R { x: input.x + pad, w: input.w - 2.0 * pad, ..input };
+    let tw = if f.query.is_empty() {
+        p.text("Search project files...", ir, 14.0, FAINT, false);
+        0.0
+    } else {
+        p.text(&f.query, ir, 14.0, TEXT, false)
+    };
+    let ch = app.px(18.0);
+    p.rect(R { x: ir.x + tw + app.px(1.0), y: input.y + ((input.h - ch) / 2.0).round(), w: app.px(1.5), h: ch }, ACCENT);
+
+    if f.matches.is_empty() {
+        let msg = if f.files.is_empty() { "No files" } else { "No matches" };
+        let row = app.finder_row(0);
+        p.text(msg, R { x: row.x + app.px(8.0), w: row.w - app.px(16.0), ..row }, 13.0, MUTED, false);
+        return;
+    }
+    for (k, i) in (f.top..f.matches.len()).take(app.finder_rows()).enumerate() {
+        let row = app.finder_row(k);
+        if i == f.sel {
+            p.rect(row, SELECT);
+        } else if f.hover == Some(i) {
+            p.rect(row, HOVER);
+        }
+        let m = &f.matches[i];
+        let path = &f.files[m.file];
+        let (dir, name) = path.rsplit_once('/').map_or(("", path.as_str()), |(d, n)| (d, n));
+        let name_at = path.chars().count() - name.chars().count();
+        let ic = app.px(16.0);
+        p.icon(icons::files::for_name(name), R { x: row.x + app.px(8.0), w: ic, ..row }, MUTED);
+        let tx = row.x + app.px(8.0) + ic + app.px(8.0);
+        let end = row.x + row.w - app.px(8.0);
+        let nw = highlighted(p, name, name_at, &m.pos, R { x: tx, w: end - tx, ..row }, 13.0, TEXT);
+        let dx = tx + nw + app.px(8.0);
+        if !dir.is_empty() && dx < end {
+            highlighted(p, dir, 0, &m.pos, R { x: dx, w: end - dx, ..row }, 12.0, MUTED);
+        }
+    }
+}
+
 /// Right-click context menu, drawn on top of everything.
 fn menu(app: &App, p: &mut Painter) {
     let Some(m) = &app.menu else { return };
@@ -779,7 +855,9 @@ fn status(app: &App, p: &mut Painter) {
         p.text_right("Enter confirm · Esc cancel · Tab complete", r.w - x, r, 12.0, FAINT, false);
         return;
     }
-    let right = if app.prefix {
+    let right = if app.finder.is_some() {
+        "↑↓ select · Enter open · Esc close"
+    } else if app.prefix {
         "| split · t tab · 1-9 tab · h/l focus · x close · c clear · j/k worktree · n attention · Tab sidebar · b hide · q quit"
     } else {
         let fed = app.focused().filter(|_| app.focus == Focus::Panes).and_then(|id| app.panes.get(&id)?.editor.as_ref());
@@ -790,7 +868,7 @@ fn status(app: &App, p: &mut Painter) {
             Focus::Panes if editing => "⌘F find · ⌘S save · ⌘Z undo · ⌘⇧Z redo · ⌘X/C line or selection · ⌘[ ] indent · ⌘W close · ⌘T terminal tab",
             Focus::Files => "Enter open · ←→ fold · right-click for actions · Esc back · ⌘⇧E hide",
             Focus::Sidebar => "Enter open · right-click for actions · a add project · w worktree · W workspace · D delete worktree · x delete",
-            Focus::Panes => "⌘T tab · ⌘⇧[ ] tabs · ⌘D split · ⌘[ ] focus · ⌘K clear · ⌘E sidebar · ⌘⇧E files · ⌘↑↓ worktree · C-a prefix",
+            Focus::Panes => "⌘P go to file · ⌘T tab · ⌘⇧[ ] tabs · ⌘D split · ⌘[ ] focus · ⌘K clear · ⌘E sidebar · ⌘⇧E files · ⌘↑↓ worktree · C-a prefix",
         }
     };
     let rw = p.measure(right, 12.0, app.prefix);

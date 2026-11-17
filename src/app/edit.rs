@@ -58,6 +58,9 @@ impl App {
         if let Some(v) = self.views.get_mut(view) {
             v.reveal(id);
         }
+        self.recent_files.retain(|r| r != p);
+        self.recent_files.insert(0, p.to_path_buf());
+        self.recent_files.truncate(50);
         Ok(id)
     }
 

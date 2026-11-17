@@ -3,6 +3,7 @@ mod app;
 mod config;
 mod editor;
 mod files;
+mod finder;
 mod git;
 mod gpu;
 mod icons;
