@@ -3,8 +3,11 @@
 use std::sync::Arc;
 use winit::window::Window;
 
-/// Glyph atlas side, in texels. When it fills up, `Fonts` drops every cache and the frame is redrawn.
+/// Glyph atlas side, in texels, at start. When it fills up, `Fonts` drops every cache, doubles
+/// it (up to `ATLAS_MAX`) and the frame is redrawn: small by default, big only when needed (CJK,
+/// emoji, large zoom), and never thrashing.
 pub const ATLAS: u32 = 1024;
+pub const ATLAS_MAX: u32 = 4096;
 
 /// `Inst::misc[0]` kinds: solid (optionally rounded) rect, alpha-mask glyph, color glyph (emoji).
 pub const RECT: f32 = 0.0;
@@ -84,8 +87,11 @@ pub struct Gpu {
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
     bind: wgpu::BindGroup,
+    bgl: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
     uniform: wgpu::Buffer,
     atlas: wgpu::Texture,
+    atlas_size: u32,
     inst: wgpu::Buffer,
     inst_cap: usize,
 }
@@ -117,17 +123,7 @@ impl Gpu {
         };
         surface.configure(&device, &config);
 
-        let atlas = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("atlas"),
-            size: wgpu::Extent3d { width: ATLAS, height: ATLAS, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let view = atlas.create_view(&Default::default());
+        let atlas = Self::atlas_texture(&device, ATLAS);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default()); // nearest: glyphs sit on whole pixels
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("uniform"),
@@ -162,15 +158,7 @@ impl Gpu {
                 },
             ],
         });
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &bgl,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
-            ],
-        });
+        let bind = Self::bind_group(&device, &bgl, &uniform, &atlas, &sampler);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[&bgl], push_constant_ranges: &[] });
         let attrs = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4];
@@ -205,7 +193,43 @@ impl Gpu {
         });
         let inst_cap = 4096;
         let inst = Self::inst_buffer(&device, inst_cap);
-        Gpu { surface, device, queue, config, pipeline, bind, uniform, atlas, inst, inst_cap }
+        Gpu { surface, device, queue, config, pipeline, bind, bgl, sampler, uniform, atlas, atlas_size: ATLAS, inst, inst_cap }
+    }
+
+    fn atlas_texture(device: &wgpu::Device, size: u32) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("atlas"),
+            size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        })
+    }
+
+    fn bind_group(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, uniform: &wgpu::Buffer, atlas: &wgpu::Texture, sampler: &wgpu::Sampler) -> wgpu::BindGroup {
+        let view = atlas.create_view(&Default::default());
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
+            ],
+        })
+    }
+
+    /// Replace the atlas with an empty one of `size`² texels (its glyphs were dropped too).
+    pub fn set_atlas_size(&mut self, size: u32) {
+        if size == self.atlas_size {
+            return;
+        }
+        self.atlas = Self::atlas_texture(&self.device, size);
+        self.bind = Self::bind_group(&self.device, &self.bgl, &self.uniform, &self.atlas, &self.sampler);
+        self.atlas_size = size;
     }
 
     fn inst_buffer(device: &wgpu::Device, n: usize) -> wgpu::Buffer {
@@ -293,7 +317,7 @@ impl Gpu {
             self.inst_cap = insts.len().next_power_of_two();
             self.inst = Self::inst_buffer(&self.device, self.inst_cap);
         }
-        let u = [self.config.width as f32, self.config.height as f32, ATLAS as f32, ATLAS as f32];
+        let u = [self.config.width as f32, self.config.height as f32, self.atlas_size as f32, self.atlas_size as f32];
         self.queue.write_buffer(&self.uniform, 0, bytemuck::cast_slice(&u));
         if !insts.is_empty() {
             self.queue.write_buffer(&self.inst, 0, bytemuck::cast_slice(insts));

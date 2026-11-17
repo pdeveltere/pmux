@@ -56,7 +56,7 @@ pub const NAMES: &[&str] = &[
 /// A colored run on one line: chars `start..end`, index into `NAMES`.
 pub type Span = (usize, usize, u8);
 
-/// Files bigger than this aren't highlighted (each edit re-highlights the whole buffer).
+/// Files bigger than this aren't highlighted (each edit re-highlights the whole buffer, in the background).
 const MAX_BYTES: usize = 2 << 20;
 
 /// The language for a file, by extension or name.
@@ -132,15 +132,21 @@ fn run<'a>(hl: &'a mut Highlighter, cfg: &'a HighlightConfiguration, src: &'a st
 }
 
 /// Highlight `lines` (joined with '\n') as `lang`: one list of spans per line.
+#[cfg(test)]
 pub fn highlight(lang: &str, lines: &[String]) -> Vec<Vec<Span>> {
-    let mut out = vec![Vec::new(); lines.len()];
+    highlight_src(lang, &lines.join("\n"))
+}
+
+/// Highlight `src` as `lang`: one list of spans per line. Takes ~0.3 ms per KB: run it off the
+/// UI thread.
+pub fn highlight_src(lang: &str, src: &str) -> Vec<Vec<Span>> {
+    let mut out = vec![Vec::new(); src.split('\n').count()];
     let Some(cfg) = config(lang) else { return out };
-    let src = lines.join("\n");
     if src.len() > MAX_BYTES {
         return out;
     }
     let mut hl = Highlighter::new();
-    let Ok(events) = run(&mut hl, cfg, &src) else { return out };
+    let Ok(events) = run(&mut hl, cfg, src) else { return out };
     // Byte offset → (line, char column), walked forward as events arrive in order.
     let mut stack: Vec<u8> = Vec::new();
     let (mut line, mut col, mut at) = (0usize, 0usize, 0usize);

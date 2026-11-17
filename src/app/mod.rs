@@ -44,12 +44,16 @@ pub enum Ev {
     /// From the background pmux that holds the terminals.
     Hold(crate::hold::Msg),
     Api(crate::api::Request, Sender<Reply>),
-    Git,
-    Behind(HashMap<PathBuf, u32>),
+    /// Git metadata changed under these paths (from `git::watch_paths`).
+    Git(Vec<PathBuf>),
+    /// Behind counts for these worktrees (only nonzero ones in the map).
+    Behind(Vec<PathBuf>, HashMap<PathBuf, u32>),
     /// An explorer folder changed on disk.
     Fs,
     /// `git status` for an explorer root finished.
     FileStatus(PathBuf, git::Status),
+    /// A background highlight of editor pane `.0` at text version `.1` finished.
+    Highlighted(u32, u64, Vec<Vec<crate::syntax::Span>>),
 }
 
 pub type Tx = EventLoopProxy<Ev>;
@@ -213,8 +217,8 @@ impl App {
             hold: None,
             saved_last: String::new(),
             meta_last: HashMap::new(),
-            watcher: watch::Watcher::new(tx.clone(), || Ev::Git),
-            files_watcher: watch::Watcher::new(tx.clone(), || Ev::Fs),
+            watcher: watch::Watcher::new(tx.clone(), Ev::Git),
+            files_watcher: watch::Watcher::new(tx.clone(), |_| Ev::Fs),
             tx,
             behind: HashMap::new(),
             files: HashMap::new(),
@@ -258,8 +262,11 @@ impl App {
                 let r = self.on_api(req);
                 let _ = rtx.send(r);
             }
-            Ev::Behind(m) => self.behind = m,
-            Ev::Git => self.reload_git(),
+            Ev::Behind(scope, m) => {
+                self.behind.retain(|k, _| !scope.contains(k));
+                self.behind.extend(m);
+            }
+            Ev::Git(changed) => self.reload_git_in(Some(&changed)),
             Ev::Fs => {
                 let vis = self.files_visible_rows();
                 if let Some(e) = self.explorer_mut() {
@@ -276,6 +283,12 @@ impl App {
                 if std::mem::take(&mut self.status_again) {
                     self.refresh_status();
                 }
+            }
+            Ev::Highlighted(id, version, hl) => {
+                if let Some(ed) = self.panes.get_mut(&id).and_then(|p| p.editor.as_mut()) {
+                    ed.set_highlight(version, hl);
+                }
+                self.highlight(id); // edits that came in meanwhile
             }
         }
     }
@@ -301,28 +314,54 @@ impl App {
         self.workspaces.iter().flat_map(|w| &w.projects)
     }
 
+    /// Watch every project's git metadata and recount every worktree's behind.
     fn rewatch(&self) {
-        self.watcher.set(self.projects().flat_map(|p| git::watch_paths(&p.path)).collect());
-        self.refresh_behind();
+        self.set_git_watch();
+        self.refresh_behind(self.projects().flat_map(|p| p.worktrees.iter().flatten()).map(|w| w.path.clone()).collect());
     }
 
-    /// Off the UI thread: one `git rev-list` per worktree.
-    fn refresh_behind(&self) {
-        let wts: Vec<PathBuf> = self.projects().flat_map(|p| p.worktrees.iter().flatten()).map(|w| w.path.clone()).collect();
+    fn set_git_watch(&self) {
+        self.watcher.set(self.projects().flat_map(|p| git::watch_paths(&p.path)).collect());
+    }
+
+    /// Off the UI thread: one `git rev-list` per worktree in `wts`.
+    fn refresh_behind(&self, wts: Vec<PathBuf>) {
+        if wts.is_empty() {
+            return;
+        }
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let m = wts.into_iter().map(|p| (git::behind(&p), p)).filter(|(n, _)| *n > 0).map(|(n, p)| (p, n)).collect();
-            let _ = tx.send_event(Ev::Behind(m));
+            let m = wts.iter().map(|p| (git::behind(p), p)).filter(|(n, _)| *n > 0).map(|(n, p)| (p.clone(), n)).collect();
+            let _ = tx.send_event(Ev::Behind(wts, m));
         });
     }
 
-    /// Re-read every project's worktrees and watch them (git metadata changed, or we changed it).
+    /// Re-read every project's worktrees and watch them (we changed them).
     fn reload_git(&mut self) {
+        self.reload_git_in(None);
+    }
+
+    /// Re-read the worktrees of the projects whose git dir holds a `changed` path (all with
+    /// `None`), re-watch, and refresh their behind counts and the explorer's git colors.
+    fn reload_git_in(&mut self, changed: Option<&[PathBuf]>) {
+        let mut views: Vec<PathBuf> = Vec::new();
         for p in self.workspaces.iter_mut().flat_map(|w| &mut w.projects) {
-            p.worktrees = git::worktrees(&p.path);
+            let hit = changed.is_none_or(|c| git::common_dir(&p.path).is_some_and(|d| c.iter().any(|x| x.starts_with(&d))));
+            if hit {
+                p.worktrees = git::worktrees(&p.path);
+                views.push(p.path.clone());
+                views.extend(p.worktrees.iter().flatten().map(|w| w.path.clone()));
+            }
         }
-        self.rewatch();
-        self.refresh_status();
+        if views.is_empty() {
+            return;
+        }
+        self.set_git_watch();
+        let wts = self.projects().flat_map(|p| p.worktrees.iter().flatten()).map(|w| w.path.clone()).filter(|w| views.contains(w)).collect();
+        self.refresh_behind(wts);
+        if self.explorer().is_some_and(|e| views.contains(&e.root)) {
+            self.refresh_status();
+        }
     }
 
     // ---- views ----

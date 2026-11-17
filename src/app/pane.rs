@@ -232,6 +232,7 @@ impl App {
         let pane = Pane::new(id, view, Vt::new(2, 1), None, Some(ed), (0, 0));
         self.insert_pane(pane, view, true);
         self.apply_layout();
+        self.highlight(id);
         Ok(id)
     }
 

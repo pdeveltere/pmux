@@ -81,10 +81,22 @@ impl App {
         let Some(ed) = self.panes.get(&id).and_then(|p| p.editor.as_ref()) else { return };
         let g = self.editor_geom(pr.body, ed);
         if let Some(ed) = self.panes.get_mut(&id).and_then(|p| p.editor.as_mut()) {
-            ed.refresh_highlight();
             ed.refresh_search();
             ed.reveal(g.rows, g.cols);
         }
+        self.highlight(id);
+    }
+
+    /// Re-highlight editor pane `id` on a thread if its text changed (one job at a time per
+    /// buffer; the result arrives as `Ev::Highlighted`).
+    pub(super) fn highlight(&mut self, id: u32) {
+        let Some(ed) = self.panes.get_mut(&id).and_then(|p| p.editor.as_mut()) else { return };
+        let Some((version, lang, src)) = ed.highlight_job() else { return };
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let hl = crate::syntax::highlight_src(lang, &src);
+            let _ = tx.send_event(super::Ev::Highlighted(id, version, hl));
+        });
     }
 
     fn page_rows(&self) -> usize {

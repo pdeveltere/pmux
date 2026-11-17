@@ -1,7 +1,7 @@
 //! Fonts, shaping and glyph rasterization into the shared atlas.
 //! Terminal cells take a fast path: (char, style) → cached glyph, no per-frame shaping.
 //! UI text (sidebar, headers) is shaped with cosmic-text and cached per string.
-use crate::gpu::ATLAS;
+use crate::gpu::{ATLAS, ATLAS_MAX};
 use crate::icons::{self, Icon};
 use cosmic_text::{Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, Style, SwashCache, SwashContent, Weight};
 use std::collections::HashMap;
@@ -57,6 +57,8 @@ pub struct Fonts {
     shaped: HashMap<(u32, bool, bool), HashMap<String, Rc<Shaped>>>,
     shaped_n: usize,
     icons: HashMap<(usize, u32), Option<Glyph>>,
+    /// Atlas side in texels (the renderer matches its texture to it).
+    pub atlas: u32,
     // Shelf packer state.
     sx: u32,
     sy: u32,
@@ -110,6 +112,7 @@ impl Fonts {
             shaped: HashMap::new(),
             shaped_n: 0,
             icons: HashMap::new(),
+            atlas: ATLAS,
             sx: 0,
             sy: 0,
             sh: 0,
@@ -144,6 +147,7 @@ impl Fonts {
         self.sx = 0;
         self.sy = 0;
         self.sh = 0;
+        self.uploads.clear();
         let px = (self.mono_pt * self.scale).round();
         let line = (px * 1.3).round();
         let fam = self.mono.clone();
@@ -251,12 +255,12 @@ impl Fonts {
         if w == 0 || h == 0 {
             return None;
         }
-        if self.sx + w + 1 > ATLAS {
+        if self.sx + w + 1 > self.atlas {
             self.sx = 0;
             self.sy += self.sh + 1;
             self.sh = 0;
         }
-        if self.sy + h + 1 > ATLAS || w + 1 > ATLAS {
+        if self.sy + h + 1 > self.atlas || w + 1 > self.atlas {
             self.overflowed = true;
             return None;
         }
@@ -282,10 +286,11 @@ impl Fonts {
         g
     }
 
-    /// Called after a frame if the atlas overflowed: start over with an empty atlas.
+    /// Called after a frame if the atlas overflowed: start over with an empty, bigger atlas.
     pub fn take_overflow(&mut self) -> bool {
         if self.overflowed {
             self.overflowed = false;
+            self.atlas = (self.atlas * 2).min(ATLAS_MAX);
             let (w, c, b) = (self.cell_w, self.cell_h, self.baseline);
             self.reset();
             (self.cell_w, self.cell_h, self.baseline) = (w, c, b);

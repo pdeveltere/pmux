@@ -20,10 +20,25 @@ impl Pos {
     }
 }
 
-#[derive(Clone)]
-struct Snapshot {
+/// Most undo steps kept.
+const UNDO_MAX: usize = 500;
+
+/// One undo (or redo) step, as a line diff: replace lines `start..start + len` of the buffer
+/// with `lines`, and put the cursor at `cur`. Only changed lines are stored, not the buffer.
+struct Step {
+    start: usize,
+    len: usize,
     lines: Vec<String>,
     cur: Pos,
+}
+
+impl Step {
+    /// Apply to `lines`; returns the step that reverts it (with cursor `cur`).
+    fn apply(self, lines: &mut Vec<String>, cur: Pos) -> Step {
+        let len = self.lines.len();
+        let removed: Vec<String> = lines.splice(self.start..self.start + self.len, self.lines).collect();
+        Step { start: self.start, len, lines: removed, cur }
+    }
 }
 
 /// What kind of edit last happened, to group typing into one undo step.
@@ -48,8 +63,13 @@ pub struct Editor {
     pub top: usize,
     pub left: usize,
     crlf: bool,
-    undo: Vec<Snapshot>,
-    redo: Vec<Snapshot>,
+    undo: std::collections::VecDeque<Step>,
+    redo: Vec<Step>,
+    /// The text as of the last undo step boundary; the edits since are diffed against it when
+    /// the step closes (`close_step`).
+    base: Vec<String>,
+    /// Cursor when the open step began.
+    base_cur: Pos,
     last_edit: Option<(EditKind, Instant)>,
     /// Lines as last saved, to tell whether the buffer is modified.
     saved: Vec<String>,
@@ -59,11 +79,14 @@ pub struct Editor {
     pub close_armed: bool,
     /// Tree-sitter language, if we have one for this file.
     pub lang: Option<&'static str>,
-    /// Highlight spans per line, as of `hl_version`.
+    /// Highlight spans per line, as of `hl_version`. Computed off the UI thread (`highlight_job`);
+    /// until a fresh result lands, edits shift these by whole lines so colors stay put.
     pub hl: Vec<Vec<crate::syntax::Span>>,
     /// Bumped on every text change.
     version: u64,
     hl_version: u64,
+    /// A highlight job is running (at most one per buffer).
+    hl_busy: bool,
     /// The find bar (⌘F), when open.
     pub search: Option<Search>,
 }
@@ -112,15 +135,14 @@ impl Editor {
             return Err("binary file".into());
         }
         let text = String::from_utf8(bytes).map_err(|_| "not UTF-8 text".to_string())?;
-        let mut e = Self::from_text(path.to_path_buf(), &text);
-        e.refresh_highlight();
-        Ok(e)
+        Ok(Self::from_text(path.to_path_buf(), &text))
     }
 
     pub fn from_text(path: PathBuf, text: &str) -> Self {
         let crlf = text.contains("\r\n");
         let lines: Vec<String> = text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l).to_string()).collect();
         let lang = crate::syntax::lang_for(&path);
+        let saved_copy = lines.clone();
         Editor {
             path,
             saved: lines.clone(),
@@ -132,28 +154,53 @@ impl Editor {
             top: 0,
             left: 0,
             crlf,
-            undo: vec![],
+            undo: Default::default(),
             redo: vec![],
+            base: saved_copy,
+            base_cur: Pos::default(),
             last_edit: None,
             close_armed: false,
             lang,
             hl: vec![],
             version: 1,
             hl_version: 0,
+            hl_busy: false,
             search: None,
         }
     }
 
-    /// Re-highlight if the text changed since last time.
-    pub fn refresh_highlight(&mut self) {
-        if self.hl_version == self.version {
-            return;
+    /// Work for a background highlight, if the text changed since the last one and none is
+    /// running: (version, language, source). Hand the result to `set_highlight`.
+    pub fn highlight_job(&mut self) -> Option<(u64, &'static str, String)> {
+        if self.hl_busy || self.hl_version == self.version {
+            return None;
         }
-        self.hl_version = self.version;
-        self.hl = match self.lang {
-            Some(l) => crate::syntax::highlight(l, &self.lines),
-            None => vec![],
+        let Some(lang) = self.lang else {
+            self.hl_version = self.version;
+            return None;
         };
+        self.hl_busy = true;
+        Some((self.version, lang, self.lines.join("\n")))
+    }
+
+    /// A background highlight of `version` finished.
+    pub fn set_highlight(&mut self, version: u64, hl: Vec<Vec<crate::syntax::Span>>) {
+        self.hl_busy = false;
+        if version > self.hl_version {
+            self.hl_version = version;
+            self.hl = hl;
+        }
+    }
+
+    /// Keep stale highlights on their lines: `n` lines were removed (n < 0) or inserted after `line`.
+    fn shift_hl(&mut self, line: usize, n: isize) {
+        let at = (line + 1).min(self.hl.len());
+        if n < 0 {
+            let end = (at + n.unsigned_abs()).min(self.hl.len());
+            self.hl.drain(at..end);
+        } else {
+            self.hl.splice(at..at, std::iter::repeat_n(Vec::new(), n as usize));
+        }
     }
 
     pub fn text(&self) -> String {
@@ -402,10 +449,8 @@ impl Editor {
         let now = Instant::now();
         let join = kind != EditKind::Other && self.last_edit.is_some_and(|(k, t)| k == kind && now - t < UNDO_JOIN);
         if !join {
-            self.undo.push(Snapshot { lines: self.lines.clone(), cur: self.cur });
-            if self.undo.len() > 500 {
-                self.undo.remove(0);
-            }
+            self.close_step();
+            self.base_cur = self.cur;
         }
         self.last_edit = Some((kind, now));
         self.version += 1;
@@ -420,6 +465,7 @@ impl Editor {
         l.truncate(byte(l, a.col));
         l.push_str(&tail);
         self.lines.drain(a.line + 1..=b.line);
+        self.shift_hl(a.line, -((b.line - a.line) as isize));
         self.cur = a;
         self.anchor = None;
         self.want_x = None;
@@ -448,6 +494,7 @@ impl Editor {
             let new: Vec<String> = rest.iter().enumerate().map(|(i, p)| if i == last { format!("{p}{tail}") } else { p.to_string() }).collect();
             self.cur = Pos::new(c.line + rest.len(), len(rest[last]));
             self.lines.splice(c.line + 1..c.line + 1, new);
+            self.shift_hl(c.line, rest.len() as isize);
         }
         self.want_x = None;
     }
@@ -573,6 +620,9 @@ impl Editor {
         let s = format!("{}\n", self.lines[l]);
         if self.lines.len() > 1 {
             self.lines.remove(l);
+            if l < self.hl.len() {
+                self.hl.remove(l);
+            }
         } else {
             self.lines[0].clear();
         }
@@ -593,11 +643,41 @@ impl Editor {
         self.swap(false);
     }
 
+    /// End the open undo step: diff the text against `base` (common lines at both ends
+    /// skipped) and push what changed. O(lines) compares, but nothing is copied but the change.
+    fn close_step(&mut self) {
+        let (old, new) = (&self.base, &self.lines);
+        let pre = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+        let max_suf = old.len().min(new.len()) - pre;
+        let suf = old.iter().rev().zip(new.iter().rev()).take(max_suf).take_while(|(a, b)| a == b).count();
+        if pre == old.len() && pre == new.len() {
+            return; // no change
+        }
+        let (old_n, new_n) = (old.len() - pre - suf, new.len() - pre - suf);
+        let changed = new[pre..pre + new_n].to_vec();
+        let lines: Vec<String> = self.base.splice(pre..pre + old_n, changed).collect();
+        self.undo.push_back(Step { start: pre, len: new_n, lines, cur: self.base_cur });
+        if self.undo.len() > UNDO_MAX {
+            self.undo.pop_front();
+        }
+    }
+
     fn swap(&mut self, undo: bool) {
-        let (from, to) = if undo { (&mut self.undo, &mut self.redo) } else { (&mut self.redo, &mut self.undo) };
-        let Some(s) = from.pop() else { return };
-        to.push(Snapshot { lines: std::mem::replace(&mut self.lines, s.lines), cur: self.cur });
-        self.cur = self.clamp(s.cur);
+        self.close_step();
+        let step = if undo { self.undo.pop_back() } else { self.redo.pop() };
+        let Some(s) = step else { return };
+        let target = s.cur;
+        // Apply to the text and to `base` alike (they're equal once the step is closed).
+        let mirror = Step { start: s.start, len: s.len, lines: s.lines.clone(), cur: s.cur };
+        let back = s.apply(&mut self.lines, self.cur);
+        mirror.apply(&mut self.base, self.cur);
+        if undo {
+            self.redo.push(back);
+        } else {
+            self.undo.push_back(back);
+        }
+        self.cur = self.clamp(target);
+        self.base_cur = self.cur;
         self.anchor = None;
         self.want_x = None;
         self.last_edit = None;
@@ -884,4 +964,53 @@ mod tests {
         e.refresh_search();
         assert_eq!(e.search.as_ref().unwrap().matches.len(), 3);
     }
+
+    #[test]
+    fn undo_redo_line_diffs_roundtrip() {
+        let mut e = ed("alpha\nbeta\ngamma\ndelta\nepsilon");
+        let mut states = vec![e.text()];
+        let mut seed = 7u64;
+        let mut rnd = |n: usize| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as usize % n.max(1)
+        };
+        for step in 0..60 {
+            let l = rnd(e.lines.len());
+            e.set_cursor(Pos::new(l, rnd(e.lines[l].chars().count() + 1)), false);
+            match step % 5 {
+                0 => e.insert("x\ny"),
+                1 => e.insert("zz"),
+                2 => {
+                    let l2 = rnd(e.lines.len());
+                    e.set_cursor(Pos::new(l2, 0), true);
+                    e.delete(Move::Left);
+                }
+                3 => {
+                    e.cut();
+                }
+                _ => e.indent(1),
+            }
+            if e.text() != *states.last().unwrap() {
+                states.push(e.text());
+            }
+        }
+        let fin = e.text();
+        for want in states.iter().rev().skip(1) {
+            e.undo();
+            assert_eq!(e.text(), *want);
+        }
+        assert!(!e.modified());
+        for want in states.iter().skip(1) {
+            e.redo();
+            assert_eq!(e.text(), *want);
+        }
+        assert_eq!(e.text(), fin);
+        // An edit after undo drops the redo history.
+        e.undo();
+        e.insert("!");
+        let t = e.text();
+        e.redo();
+        assert_eq!(e.text(), t);
+    }
+
 }

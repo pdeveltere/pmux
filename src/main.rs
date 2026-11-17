@@ -90,6 +90,7 @@ impl Runner {
         if fonts.take_overflow() {
             insts = ui::frame(app, fonts);
         }
+        gpu.set_atlas_size(fonts.atlas);
         for u in fonts.uploads.drain(..) {
             gpu.upload(u.x, u.y, u.w, u.h, &u.rgba);
         }
