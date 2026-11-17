@@ -332,6 +332,7 @@ impl App {
                 (Close::Worktree(proj, wt, dirty), format!("Delete {name}{panes}? Removes its folder.{lost} y/n"))
             }
             c if n == 0 => return self.close(c),
+            c @ Close::Project(..) => (c, format!("Close {name} and its {}? Files stay on disk. y/n", util::plural(n, "pane"))),
             c => (c, format!("Delete {name} and close its {}? Files stay on disk. y/n", util::plural(n, "pane"))),
         };
         self.prompt = Some(Prompt::new(PromptKind::Confirm(c), label, ""));
@@ -369,12 +370,12 @@ impl App {
             Close::Workspace(w) => {
                 let ws = self.workspaces.remove(w);
                 self.folded.remove(&ws_key(&ws.name));
-                self.closed_tree(name);
+                self.closed_tree(format!("deleted {name} from pmux"));
             }
             Close::Project(w, p) => {
                 let pr = self.workspaces[w].projects.remove(p);
                 self.folded.remove(&proj_key(&pr.path));
-                self.closed_tree(name);
+                self.closed_tree(format!("closed {name}"));
             }
         }
         self.sel = self.sel.min(self.rows().len().saturating_sub(1));
@@ -382,9 +383,9 @@ impl App {
     }
 
     /// After removing a workspace or project from the tree.
-    fn closed_tree(&mut self, name: String) {
+    fn closed_tree(&mut self, msg: String) {
         self.save();
         self.rewatch();
-        self.say(format!("deleted {name} from pmux"));
+        self.say(msg);
     }
 }

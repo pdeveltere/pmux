@@ -1,5 +1,5 @@
 //! Build one frame's draw list: sidebar, tabs, terminal grids, file explorer, status bar, menu.
-use crate::app::{proj_key, subtree_end, ws_key, Action, App, Focus, Pane, Row, State, TabHit, Tree, TreeRow, R};
+use crate::app::{ago, is_default_branch, proj_key, subtree_end, ws_key, Action, AgentRow, App, Focus, Group, Pane, Row, State, TabHit, Tree, TreeRow, R};
 use crate::git::FileState;
 use crate::gpu::{Inst, COLOR, MASK, RECT};
 use crate::icons::{self, Icon};
@@ -94,6 +94,15 @@ fn state_color(s: Option<State>) -> C {
         Some(State::Waiting | State::Error) => rgb(0xef, 0x5b, 0x5b),
         Some(State::Idle | State::Done) => rgb(0x4c, 0xc2, 0x6a),
         None => FAINT,
+    }
+}
+
+fn group_color(g: Group) -> C {
+    match g {
+        Group::NeedsYou => state_color(Some(State::Waiting)),
+        Group::Done => state_color(Some(State::Done)),
+        Group::Working => state_color(Some(State::Working)),
+        Group::Idle => MUTED,
     }
 }
 
@@ -355,15 +364,13 @@ fn sidebar(app: &App, p: &mut Painter) {
             }
         };
         let r = t.bg;
-        // State dots on the right.
-        let mut ps: Vec<&Pane> = panes.iter().map(|id| &app.panes[id]).collect();
-        ps.sort_by_key(|pn| pn.id);
-        let n = ps.len().min(6);
+        // One state dot on the right: the most urgent of the row's panes.
         let (dd, gap) = (app.px(7.0), app.px(5.0));
-        let dots_w = n as f32 * (dd + gap);
-        for (k, pn) in ps.iter().take(n).enumerate() {
-            let cx = t.right - dots_w + k as f32 * (dd + gap) + dd / 2.0 + gap;
-            p.dot(cx, r.y + r.h / 2.0, dd, state_color(pn.state()));
+        // Stateless panes (plain shells) get no dot.
+        let st = panes.iter().filter_map(|id| app.panes[id].state()).max();
+        let dots_w = if st.is_some() { dd + gap } else { 0.0 };
+        if let Some(st) = st {
+            p.dot(t.right - dd / 2.0, r.y + r.h / 2.0, dd, state_color(Some(st)));
         }
         let mut label_end = t.right - dots_w - app.px(4.0);
         // Behind upstream: red ↓N, left of the dots.
@@ -383,6 +390,80 @@ fn sidebar(app: &App, p: &mut Painter) {
             let y = (tree.y(b) - th / 2.0).clamp(tree.area.y, tree.area.y + tree.area.h - th);
             let t = tree.row(lv, b);
             p.rect(R { x: t.icon.x, y, w: t.bg.x + t.bg.w - t.icon.x, h: th }, ACCENT);
+        }
+    }
+    agents(app, p);
+}
+
+/// A pane title worth showing next to its location: set by `pmux title`, or the program's own
+/// (minus leading spinner/glyphs), unless it's just a path, `user@host`, or the agent's name.
+fn agent_title(pn: &Pane) -> Option<String> {
+    if let Some(t) = &pn.title {
+        return Some(t.clone());
+    }
+    let t = pn.osc_title.as_deref()?.trim_start_matches(|c: char| !c.is_alphanumeric()).trim();
+    let telling = !t.is_empty() && !t.starts_with(['~', '/']) && !t.contains('@') && Some(t.to_lowercase().as_str()) != pn.agent;
+    telling.then(|| t.to_string())
+}
+
+/// Agents panel, under the workspace tree: Needs you / Done / Working / Idle sections.
+fn agents(app: &App, p: &mut Painter) {
+    let area = app.agents_rect();
+    if area.h <= 0.0 {
+        return;
+    }
+    let line = app.hairline();
+    p.rect(R { h: line, ..area }, BORDER);
+    let rows = app.agent_rows();
+    let header = app.agents_header();
+    panel_header(app, p, R { y: header.y + line, h: header.h - line, ..header }, "Agents");
+    let tree = app.agents_tree(rows.len());
+    if rows.is_empty() {
+        let r = R { y: tree.area.y, h: tree.row_h(), ..tree.area };
+        p.text("No agents running", R { x: r.x + app.px(12.0), w: r.w - app.px(24.0), ..r }, 12.0, FAINT, false);
+        return;
+    }
+    let focused = app.focused();
+    let dd = app.px(7.0);
+    for i in tree.visible() {
+        let t = tree.row(0, i);
+        let r = t.bg;
+        let left = r.x + app.px(12.0);
+        match rows[i] {
+            AgentRow::Header(g, n) => {
+                let hover = app.agents_hover == Some(i);
+                let w = p.text(g.label(), R { x: left, w: t.right - left, ..r }, 11.5, group_color(g), true);
+                let folded = app.agent_group_folded(g);
+                let c = if hover { TEXT } else { FAINT };
+                p.text(&if folded { format!("{n} hidden") } else { n.to_string() }, R { x: left + w + app.px(6.0), w: app.px(80.0), ..r }, 11.5, c, false);
+            }
+            AgentRow::Agent(id) => {
+                let Some(pn) = app.panes.get(&id) else { continue };
+                let g = app.agent_group(id).unwrap_or(Group::Idle);
+                let is_focus = focused == Some(id);
+                let bg = row_bg(false, is_focus, app.agents_hover == Some(i));
+                if let Some(c) = bg {
+                    p.rect(r, c);
+                }
+                // Status on the right: a ring when idle, else a dot in the group's color.
+                let (cx, cy) = (t.right - dd / 2.0, r.y + r.h / 2.0);
+                p.dot(cx, cy, dd, group_color(g));
+                if g == Group::Idle {
+                    p.dot(cx, cy, dd - 2.0 * app.px(1.5), bg.unwrap_or(SIDEBAR));
+                }
+                let mut end = t.right - dd - app.px(8.0);
+                end = p.text_right(&ago(pn.since()), end, r, 11.0, FAINT, false) - app.px(8.0);
+                // "location · title": location is the project, or the branch of a linked worktree.
+                let (_, proj, wt) = app.names(&pn.view);
+                let place = if is_default_branch(&wt) || wt == proj { proj } else { wt };
+                let dim = g == Group::Idle && !is_focus;
+                let w = p.text(&place, R { x: left, w: (end - left).max(0.0), ..r }, 13.0, if dim { MUTED } else { TEXT }, false);
+                let rest = agent_title(pn).unwrap_or_else(|| pn.kind().to_string());
+                let x = left + w + app.px(5.0);
+                if end > x {
+                    p.text(&format!("· {rest}"), R { x, w: end - x, ..r }, 13.0, FAINT, false);
+                }
+            }
         }
     }
 }

@@ -1,8 +1,10 @@
 //! App model and behaviour: workspaces → projects → worktrees, panes, keys, mouse, socket API.
 //!
 //! `App` is one struct; its behaviour is split by concern across the submodules, each adding an
-//! `impl App` block: `layout` (geometry), `pane` (terminals), `sidebar`, `explorer` (file panel),
+//! `impl App` block: `layout` (geometry), `pane` (terminals), `sidebar`, `agents` (agents panel), `explorer` (file panel),
 //! `edit` (editor panes), `find` (go to file), `navigate` (tabs/focus), `keys`, `mouse`, `menu`, `commands` (socket API).
+mod adopt;
+mod agents;
 mod commands;
 mod edit;
 mod explorer;
@@ -14,8 +16,10 @@ mod model;
 mod mouse;
 mod navigate;
 mod pane;
+mod restore;
 mod sidebar;
 
+pub use agents::{ago, AgentRow, Group, AGENTS_SHARE};
 pub use layout::*;
 pub use model::*;
 pub use pane::{Pane, State};
@@ -36,8 +40,8 @@ use winit::window::CursorIcon;
 const FLASH_FOR: Duration = Duration::from_secs(4);
 
 pub enum Ev {
-    Output(u32, Vec<u8>),
-    Exit(u32),
+    /// From the background pmux that holds the terminals.
+    Hold(crate::hold::Msg),
     Api(crate::api::Request, Sender<Reply>),
     Git,
     Behind(HashMap<PathBuf, u32>),
@@ -70,6 +74,14 @@ pub struct App {
     pub hover: Option<usize>,
     /// Tab bar part under the mouse.
     pub tab_hover: Option<TabHit>,
+    /// Agents panel row under the mouse.
+    pub agents_hover: Option<usize>,
+    /// Agents panel scroll: first visible row.
+    agents_top: usize,
+    /// Share of the sidebar's height the agents panel takes (drag its top edge to resize).
+    pub agents_share: f32,
+    /// A done agent you're looking at: listed under Done until focus leaves it.
+    held: Option<u32>,
     pub prefix: bool,
     pub prompt: Option<Prompt>,
     pub folded: HashSet<String>,
@@ -107,6 +119,12 @@ pub struct App {
     recent_files: Vec<PathBuf>,
     socket: PathBuf,
     tx: Tx,
+    /// Link to the background pmux holding the terminals (`None` until attached, or after it stopped).
+    hold: Option<crate::hold::Link>,
+    /// Layout last sent to it.
+    saved_last: String,
+    /// Title and state last sent to it, per terminal.
+    meta_last: HashMap<u32, crate::hold::Meta>,
     watcher: watch::Watcher,
     /// Commits each worktree is behind its upstream (only nonzero entries).
     pub behind: HashMap<PathBuf, u32>,
@@ -146,6 +164,10 @@ impl App {
             sel: 0,
             hover: None,
             tab_hover: None,
+            agents_hover: None,
+            agents_top: 0,
+            agents_share: AGENTS_SHARE,
+            held: None,
             prefix: false,
             prompt: None,
             folded: HashSet::new(),
@@ -172,6 +194,9 @@ impl App {
             finder: None,
             recent_files: Vec::new(),
             socket,
+            hold: None,
+            saved_last: String::new(),
+            meta_last: HashMap::new(),
             watcher: watch::Watcher::new(tx.clone(), || Ev::Git),
             files_watcher: watch::Watcher::new(tx.clone(), || Ev::Fs),
             tx,
@@ -190,8 +215,22 @@ impl App {
     pub fn handle(&mut self, ev: Ev) {
         self.dirty = true;
         match ev {
-            Ev::Output(id, data) => self.on_output(id, &data),
-            Ev::Exit(id) => self.on_exit(id),
+            Ev::Hold(m) => match m {
+                crate::hold::Msg::Output(id, data) => self.on_output(id, &data),
+                crate::hold::Msg::Exit(id) => self.on_exit(id),
+                crate::hold::Msg::Agent(id, a) => {
+                    if let Some(p) = self.panes.get_mut(&id) {
+                        p.set_agent(a.as_deref());
+                    }
+                }
+                crate::hold::Msg::Screen(id, st) => {
+                    if let Some(p) = self.panes.get_mut(&id) {
+                        p.set_screen(st);
+                    }
+                }
+                crate::hold::Msg::Failed(e) => self.say(format!("spawn failed: {e}")),
+                crate::hold::Msg::Lost => self.on_hold_lost(),
+            },
             Ev::Api(req, rtx) if req.args.first().map(String::as_str) == Some("snapshot") => {
                 let path = req.args.get(1).cloned().unwrap_or_else(|| "pmux-snapshot.bmp".into());
                 self.snapshot = Some((path, rtx));
@@ -235,7 +274,7 @@ impl App {
         config::save(&c);
     }
 
-    fn projects(&self) -> impl Iterator<Item = &Project> {
+    pub(super) fn projects(&self) -> impl Iterator<Item = &Project> {
         self.workspaces.iter().flat_map(|w| &w.projects)
     }
 
@@ -306,7 +345,7 @@ impl App {
         t.panes.get(t.focus).copied()
     }
 
-    fn open_view(&mut self, view: PathBuf) {
+    pub fn open_view(&mut self, view: PathBuf) {
         if self.panes_in(&view).is_empty() {
             if let Err(e) = self.spawn_pane(&view, &view, false) {
                 return self.say(format!("spawn failed: {e}"));
@@ -350,8 +389,19 @@ impl App {
     }
 
     fn see_focused(&mut self) {
-        if let Some(p) = self.focused().and_then(|id| self.panes.get_mut(&id)) {
+        let f = self.focused();
+        // Looking at a done agent: it turns idle, but stays listed under Done until you leave it.
+        if f != self.held {
+            self.held = f.filter(|id| self.panes.get(id).and_then(Pane::state) == Some(State::Done));
+        }
+        if let Some(p) = f.and_then(|id| self.panes.get_mut(&id)) {
             p.bell = false;
+        }
+        let shown: Vec<u32> = self.current.as_ref().map(|v| self.tab_panes(v).to_vec()).unwrap_or_default();
+        for id in shown {
+            if let Some(p) = self.panes.get_mut(&id) {
+                p.unseen = false;
+            }
         }
     }
 
@@ -360,7 +410,7 @@ impl App {
     }
 
     /// Show a message in the status bar for a few seconds.
-    fn say(&mut self, m: impl Into<String>) {
+    pub fn say(&mut self, m: impl Into<String>) {
         self.flash = Some((m.into(), Instant::now()));
     }
 
@@ -373,6 +423,6 @@ impl App {
     pub fn next_deadline(&self) -> Option<Instant> {
         let now = Instant::now();
         let flash = self.flash.as_ref().map(|(_, t)| *t + FLASH_FOR).filter(|f| *f > now);
-        self.panes.values().filter_map(Pane::state_change_at).chain(flash).min()
+        self.panes.values().filter_map(Pane::state_change_at).chain(flash).chain(self.agents_deadline()).min()
     }
 }

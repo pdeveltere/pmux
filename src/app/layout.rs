@@ -3,8 +3,8 @@ use super::{Action, App, TabHit};
 
 // Layout, in logical px (multiplied by the scale factor).
 pub const SIDEBAR_W: f32 = 250.0;
-/// Tree row: Zed's "comfortable" entry spacing, i.e. one 14px label line at 1.618 line height.
-pub const ROW_H: f32 = 14.0 * 1.618;
+/// Tree row: Zed's project panel entry, a 24px (`h_6`) label box inside a 1px border.
+pub const ROW_H: f32 = 26.0;
 /// Tree indent per level (Zed's project panel `indent_size`).
 pub const INDENT: f32 = 20.0;
 /// UI icon size, in points.
@@ -60,7 +60,7 @@ pub struct Tree {
     pub top: usize,
     /// Number of rows.
     pub len: usize,
-    scale: f32,
+    pub(super) scale: f32,
 }
 
 /// One row of a tree: full-width background, then the icon in its level's slot (an indent guide
@@ -172,7 +172,7 @@ impl App {
     }
 
     /// Sidebar content: the panel minus its right border.
-    fn sidebar_content(&self) -> R {
+    pub(super) fn sidebar_content(&self) -> R {
         let sb = self.sidebar_rect();
         R { w: (sb.w - self.hairline()).max(0.0), ..sb }
     }
@@ -185,31 +185,37 @@ impl App {
     }
 
     /// A panel's title header: the top of its content, as tall as the tab bar so they line up.
-    fn header_of(&self, content: R) -> R {
+    pub(super) fn header_of(&self, content: R) -> R {
         R { h: self.px(PANEL_HEADER_H).min(content.h), ..content }
     }
 
     /// Below a panel's header: where its tree goes.
-    fn below_header(&self, content: R) -> R {
+    pub(super) fn below_header(&self, content: R) -> R {
         let h = self.header_of(content).h;
         R { y: content.y + h, h: (content.h - h).max(0.0), ..content }
     }
 
+    /// The sidebar above the agents panel: workspace tree.
+    fn workspaces_content(&self) -> R {
+        let c = self.sidebar_content();
+        R { h: (self.agents_rect().y - c.y).max(0.0), ..c }
+    }
+
     pub fn sidebar_header(&self) -> R {
-        self.header_of(self.sidebar_content())
+        self.header_of(self.workspaces_content())
     }
 
     pub fn files_header(&self) -> R {
         self.header_of(self.files_content())
     }
 
-    fn make_tree(&self, area: R, top: usize, len: usize) -> Tree {
+    pub(super) fn make_tree(&self, area: R, top: usize, len: usize) -> Tree {
         Tree { area, top, len, scale: self.scale }
     }
 
     /// The sidebar's tree of `nrows` rows, scrolled just enough to show the selection.
     pub fn sidebar_tree(&self, nrows: usize) -> Tree {
-        let t = self.make_tree(self.below_header(self.sidebar_content()), 0, nrows);
+        let t = self.make_tree(self.below_header(self.workspaces_content()), 0, nrows);
         let sel = self.sel.min(nrows.saturating_sub(1));
         Tree { top: (sel + 1).saturating_sub(t.capacity()), ..t }
     }

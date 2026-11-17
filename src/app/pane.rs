@@ -1,14 +1,12 @@
 //! Panes: terminals (shells, PTY I/O, agent detection, mouse reporting) and editors.
-use super::{App, Ev, Tab, R};
+use super::{App, Tab, R};
 use crate::editor::Editor;
+use crate::hold::{Link, Spawn};
 use crate::platform;
-use crate::pty;
 use crate::term::Vt;
 use alacritty_terminal::event::{Event as TEvent, WindowSize};
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::term::TermMode;
-use std::fs::File;
-use std::io::{Read, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
 use winit::event::MouseButton;
@@ -18,8 +16,6 @@ use winit::keyboard::ModifiersState;
 const WORKING_QUIET: Duration = Duration::from_millis(1500);
 /// Output this soon after typing is the echo, not the agent working.
 const ECHO_GRACE: Duration = Duration::from_millis(300);
-/// How often to check which process owns the terminal.
-const PROBE_EVERY: Duration = Duration::from_millis(250);
 
 /// A pane's state as the sidebar shows it. Order is urgency: the most urgent wins in a summary.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -50,13 +46,10 @@ impl State {
 pub struct Pane {
     pub id: u32,
     pub vt: Vt,
-    /// The PTY; `None` for an editor pane.
-    master: Option<File>,
+    /// The terminal, held by the background pmux; `None` for an editor pane.
+    link: Option<Link>,
     /// Set for an editor pane (then `vt` is an idle placeholder).
     pub editor: Option<Editor>,
-    shell: i32,
-    /// Foreground process group, last seen.
-    pgid: i32,
     pub view: std::path::PathBuf,
     /// Set with `pmux title`.
     pub title: Option<String>,
@@ -65,25 +58,56 @@ pub struct Pane {
     /// Set with `pmux status`; overrides the heuristic.
     pub state: Option<State>,
     pub agent: Option<&'static str>,
+    /// What the agent's screen says it's doing (from the background pmux, see `detect`).
+    pub screen: Option<crate::detect::Screen>,
+    /// When `screen` last changed.
+    screen_at: Instant,
     pub bell: bool,
+    /// The agent worked while out of sight: when it goes quiet it's done, until looked at.
+    pub(super) unseen: bool,
+    /// When the explicit `state` was set.
+    pub(super) state_at: Instant,
+    /// When the current burst of output began.
+    work_start: Instant,
     last_output: Instant,
     last_input: Instant,
-    last_probe: Instant,
     pub rows: usize,
     pub cols: usize,
 }
 
 impl Pane {
-    /// Effective state: the one set explicitly, else a bell, else working/idle from output for agents.
+    /// Effective state: the one set explicitly, else a bell, else what the agent's screen shows,
+    /// else working/idle from output. Output counts as working even when the screen looks idle
+    /// (the screen rules can miss a new layout; output can't).
     pub fn state(&self) -> Option<State> {
+        use crate::detect::Screen;
         if self.state.is_some() {
             return self.state;
         }
-        if self.bell {
+        if self.bell || self.screen == Some(Screen::Blocked) {
             return Some(State::Waiting);
         }
         self.agent?;
-        Some(if self.last_output.elapsed() < WORKING_QUIET { State::Working } else { State::Idle })
+        Some(if self.screen == Some(Screen::Working) || self.last_output.elapsed() < WORKING_QUIET {
+            State::Working
+        } else if self.unseen {
+            State::Done
+        } else {
+            State::Idle
+        })
+    }
+
+    /// When the effective state began (for "how long" in the agents panel).
+    pub fn since(&self) -> Instant {
+        if self.state.is_some() {
+            self.state_at
+        } else if self.screen.is_some() && self.screen_at > self.last_output - WORKING_QUIET {
+            self.screen_at
+        } else if self.bell || self.last_output.elapsed() >= WORKING_QUIET {
+            self.last_output + WORKING_QUIET
+        } else {
+            self.work_start
+        }
     }
 
     /// When the working → idle heuristic flips next, if it will.
@@ -107,82 +131,57 @@ impl Pane {
         self.agent.unwrap_or("shell")
     }
 
-    /// Write to the PTY (keyboard input, query replies).
+    /// Write to the terminal (keyboard input, query replies).
     pub(super) fn write(&mut self, bytes: &[u8]) {
-        if let Some(m) = &mut self.master {
-            let _ = m.write_all(bytes);
+        if let Some(l) = &self.link {
+            l.input(self.id, bytes);
         }
     }
 
     /// Send Enter after a short delay, so agents don't take it as part of a paste.
     pub(super) fn enter_later(&self) {
-        if let Some(Ok(mut f)) = self.master.as_ref().map(File::try_clone) {
+        if let Some(l) = self.link.clone() {
+            let id = self.id;
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(80));
-                let _ = f.write_all(b"\r");
+                l.input(id, b"\r");
             });
         }
+    }
+
+    /// A terminal pane (not an editor).
+    pub fn is_term(&self) -> bool {
+        self.link.is_some()
     }
 
     pub(super) fn resize(&mut self, cols: usize, rows: usize, (cw, ch): (u16, u16)) {
         if self.rows != rows || self.cols != cols {
             self.rows = rows;
             self.cols = cols;
-            if let Some(m) = &self.master {
+            if let Some(l) = &self.link {
                 self.vt.resize(cols, rows);
-                pty::resize(m, rows as u16, cols as u16, cols as u16 * cw, rows as u16 * ch);
+                l.resize(self.id, rows as u16, cols as u16, cols as u16 * cw, rows as u16 * ch);
             }
         }
     }
 
-    /// Hang up the shell and whatever runs in the foreground.
-    fn hangup(&self) {
-        if self.master.is_none() {
-            return;
-        }
-        unsafe {
-            libc::kill(-self.pgid, libc::SIGHUP);
-            libc::kill(-self.shell, libc::SIGHUP);
+    /// The agent running in the terminal changed (seen by the background pmux).
+    pub(super) fn set_agent(&mut self, name: Option<&str>) {
+        let a = name.and_then(crate::pty::agent_of);
+        if a != self.agent {
+            self.agent = a;
+            self.state = None;
+            self.screen = None;
+            self.unseen = false;
         }
     }
 
-    /// Which process owns the terminal: detects agents starting and exiting (throttled syscall).
-    fn probe_agent(&mut self, now: Instant) {
-        let Some(master) = &self.master else { return };
-        if now - self.last_probe <= PROBE_EVERY {
-            return;
-        }
-        self.last_probe = now;
-        let pg = pty::fg_pgrp(master);
-        if pg != self.pgid {
-            self.pgid = pg;
-            let a = pty::proc_path(pg).as_deref().and_then(pty::agent_of);
-            if a != self.agent {
-                self.agent = a;
-                self.state = None;
-            }
+    pub(super) fn set_screen(&mut self, s: Option<crate::detect::Screen>) {
+        if s != self.screen {
+            self.screen = s;
+            self.screen_at = Instant::now();
         }
     }
-}
-
-/// Read the PTY on a thread, forwarding output to the event loop until it closes.
-fn pump(id: u32, mut r: File, tx: super::Tx) {
-    std::thread::spawn(move || {
-        let mut buf = vec![0u8; 64 * 1024];
-        loop {
-            match r.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if tx.send_event(Ev::Output(id, buf[..n].to_vec())).is_err() {
-                        return;
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(_) => break,
-            }
-        }
-        let _ = tx.send_event(Ev::Exit(id));
-    });
 }
 
 #[derive(Clone, Copy)]
@@ -204,6 +203,8 @@ impl App {
         let env = [
             ("PMUX", "1".to_string()),
             ("PMUX_SOCKET", self.socket.display().to_string()),
+            // For agent hooks (`pmux integration install claude`): this pmux, wherever it's installed.
+            ("PMUX_BIN", std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|_| "pmux".into())),
             ("PMUX_PANE", format!("%{id}")),
             ("PMUX_WORKSPACE", ws),
             ("PMUX_PROJECT", proj),
@@ -214,14 +215,10 @@ impl App {
         let n = if new_tab { 1 } else { self.tab_panes(view).len() + 1 };
         let body = R { w: a.w / n as f32, ..a }.inset(self.px(super::PAD));
         let (cols, rows) = self.grid_size(body);
-        let pty = pty::spawn(cwd, rows as u16, cols as u16, &env).map_err(|e| e.to_string())?;
-        pump(id, pty.master.try_clone().map_err(|e| e.to_string())?, self.tx.clone());
-        let mut child = pty.child;
-        let pgid = child.id() as i32;
-        std::thread::spawn(move || {
-            let _ = child.wait();
-        });
-        let pane = Pane::new(id, view, Vt::new(cols, rows), Some(pty.master), None, pgid, (cols, rows));
+        let link = self.link()?;
+        let env = env.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        link.spawn(id, &Spawn { cwd: cwd.to_path_buf(), view: view.to_path_buf(), rows: rows as u16, cols: cols as u16, env });
+        let pane = Pane::new(id, view, Vt::new(cols, rows), Some(link), None, (cols, rows));
         self.insert_pane(pane, view, new_tab);
         Ok(id)
     }
@@ -231,13 +228,13 @@ impl App {
         let ed = Editor::open(path)?;
         let id = self.next_id;
         self.next_id += 1;
-        let pane = Pane::new(id, view, Vt::new(2, 1), None, Some(ed), 0, (0, 0));
+        let pane = Pane::new(id, view, Vt::new(2, 1), None, Some(ed), (0, 0));
         self.insert_pane(pane, view, true);
         self.apply_layout();
         Ok(id)
     }
 
-    fn insert_pane(&mut self, pane: Pane, view: &Path, new_tab: bool) {
+    pub(super) fn insert_pane(&mut self, pane: Pane, view: &Path, new_tab: bool) {
         let id = pane.id;
         self.panes.insert(id, pane);
         let v = self.views.entry(view.to_path_buf()).or_default();
@@ -253,24 +250,26 @@ impl App {
 }
 
 impl Pane {
-    fn new(id: u32, view: &Path, vt: Vt, master: Option<File>, editor: Option<Editor>, pgid: i32, (cols, rows): (usize, usize)) -> Self {
+    pub(super) fn new(id: u32, view: &Path, vt: Vt, link: Option<Link>, editor: Option<Editor>, (cols, rows): (usize, usize)) -> Self {
         let long_ago = Instant::now() - Duration::from_secs(60);
         Pane {
             id,
             vt,
-            master,
+            link,
             editor,
-            shell: pgid,
-            pgid,
             view: view.to_path_buf(),
             title: None,
             osc_title: None,
             state: None,
             agent: None,
+            screen: None,
+            screen_at: long_ago,
             bell: false,
+            unseen: false,
+            state_at: long_ago,
+            work_start: long_ago,
             last_output: long_ago,
             last_input: long_ago,
-            last_probe: long_ago,
             rows,
             cols,
         }
@@ -308,18 +307,15 @@ impl App {
             }
             return self.on_exit(id);
         }
-        p.hangup();
+        if let Some(l) = &p.link {
+            l.kill(id);
+        }
     }
 
     pub(super) fn kill_panes(&mut self, ids: impl IntoIterator<Item = u32>) {
         for id in ids {
             self.kill_pane(id);
         }
-    }
-
-    pub fn kill_all(&mut self) {
-        let ids: Vec<u32> = self.panes.keys().copied().collect();
-        self.kill_panes(ids);
     }
 
     pub(super) fn on_exit(&mut self, id: u32) {
@@ -336,16 +332,21 @@ impl App {
 
     pub(super) fn on_output(&mut self, id: u32, data: &[u8]) {
         let focused = self.focused();
+        let shown = self.shown(id);
         let (cw, ch) = (self.cell_w as u16, self.cell_h as u16);
         let Some(p) = self.panes.get_mut(&id) else { return };
         let events = p.vt.feed(data);
         let now = Instant::now();
         if now - p.last_input > ECHO_GRACE {
+            if now - p.last_output >= WORKING_QUIET {
+                p.work_start = now;
+            }
             p.last_output = now;
+            p.unseen = !shown;
         }
         for e in events {
             match e {
-                TEvent::PtyWrite(s) => p.write(s.as_bytes()),
+                // The background pmux answers terminal queries.
                 TEvent::Title(t) => p.osc_title = Some(t),
                 TEvent::ResetTitle => p.osc_title = None,
                 TEvent::Bell => p.bell = Some(id) != focused,
@@ -361,7 +362,6 @@ impl App {
                 _ => {}
             }
         }
-        p.probe_agent(now);
     }
 
     /// Encode a mouse event for the pane's app (xterm / SGR).

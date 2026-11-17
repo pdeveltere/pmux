@@ -49,8 +49,9 @@ impl Reply {
     }
 }
 
+/// Sockets live here. `PMUX_RUNTIME_DIR` moves them (a separate pmux, e.g. for testing).
 pub fn sock_dir() -> PathBuf {
-    PathBuf::from(format!("/tmp/pmux-{}", unsafe { libc::getuid() }))
+    std::env::var_os("PMUX_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(format!("/tmp/pmux-{}", unsafe { libc::getuid() })))
 }
 
 pub fn listen(tx: Tx) -> std::io::Result<PathBuf> {
@@ -58,19 +59,35 @@ pub fn listen(tx: Tx) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(&dir)?;
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-    let path = dir.join(format!("{}.sock", std::process::id()));
-    let _ = std::fs::remove_file(&path);
-    let l = UnixListener::bind(&path)?;
-    std::thread::spawn(move || {
-        for s in l.incoming().flatten() {
-            let tx = tx.clone();
-            std::thread::spawn(move || serve(s, tx));
-        }
-    });
+    // One window, at a fixed path: terminals outlive the window, so their $PMUX_SOCKET must
+    // still reach the next one.
+    let path = dir.join("pmux.sock");
+    if UnixStream::connect(&path).is_ok() {
+        return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "pmux is already open"));
+    }
+    serve_at(&path, move |req, rtx| tx.send_event(Ev::Api(req, rtx)).is_ok())?;
     Ok(path)
 }
 
-fn serve(s: UnixStream, tx: Tx) {
+/// Where the background pmux answers commands while no window is open.
+pub fn hold_sock() -> PathBuf {
+    sock_dir().join("hold-api.sock")
+}
+
+/// Answer requests on `path`: `on` gets each one with a channel for its reply (false: shutting down).
+pub fn serve_at(path: &std::path::Path, on: impl Fn(Request, std::sync::mpsc::Sender<Reply>) -> bool + Send + Clone + 'static) -> std::io::Result<()> {
+    let _ = std::fs::remove_file(path);
+    let l = UnixListener::bind(path)?;
+    std::thread::spawn(move || {
+        for s in l.incoming().flatten() {
+            let on = on.clone();
+            std::thread::spawn(move || serve(s, on));
+        }
+    });
+    Ok(())
+}
+
+fn serve(s: UnixStream, on: impl Fn(Request, std::sync::mpsc::Sender<Reply>) -> bool) {
     let mut line = String::new();
     let mut r = BufReader::new(&s);
     if r.read_line(&mut line).is_err() {
@@ -79,7 +96,7 @@ fn serve(s: UnixStream, tx: Tx) {
     let reply = match serde_json::from_str::<Request>(&line) {
         Ok(req) => {
             let (rtx, rrx) = channel();
-            if tx.send_event(Ev::Api(req, rtx)).is_err() {
+            if !on(req, rtx) {
                 return;
             }
             rrx.recv().unwrap_or_else(|_| Reply::err("pmux closed"))
@@ -91,17 +108,9 @@ fn serve(s: UnixStream, tx: Tx) {
 }
 
 fn connect() -> Option<UnixStream> {
-    if let Ok(p) = std::env::var("PMUX_SOCKET") {
-        return UnixStream::connect(p).ok();
-    }
-    // Outside pmux: use the most recent live instance.
-    let mut socks: Vec<_> = std::fs::read_dir(sock_dir())
-        .ok()?
-        .flatten()
-        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
-        .collect();
-    socks.sort();
-    socks.into_iter().rev().find_map(|(_, p)| UnixStream::connect(p).ok())
+    let p = std::env::var("PMUX_SOCKET").map(PathBuf::from).unwrap_or_else(|_| sock_dir().join("pmux.sock"));
+    // No window open: the background pmux answers what it can.
+    UnixStream::connect(p).or_else(|_| UnixStream::connect(hold_sock())).ok()
 }
 
 pub fn client(mut args: Vec<String>) -> i32 {
@@ -114,7 +123,7 @@ pub fn client(mut args: Vec<String>) -> i32 {
         }
     }
     let Some(mut s) = connect() else {
-        eprintln!("pmux: no running pmux found (open one with `pmux`)");
+        eprintln!("pmux: no pmux window open (open one with `pmux`)");
         return 1;
     };
     let req = Request { caller: std::env::var("PMUX_PANE").ok(), args };

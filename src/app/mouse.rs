@@ -36,6 +36,7 @@ impl App {
             match edge {
                 Edge::Sidebar => self.sidebar_w = self.panel_width(x),
                 Edge::Files => self.files_w = self.panel_width(self.w - x),
+                Edge::Agents => self.resize_agents(y),
             }
             self.dirty = true;
             return;
@@ -63,25 +64,29 @@ impl App {
 
     /// What's under the mouse: hovered rows/buttons and the cursor shape.
     fn update_hover(&mut self, x: f32, y: f32) {
-        let (mut hover, mut tab, mut file) = (None, None, None);
+        let (mut hover, mut tab, mut file, mut agent) = (None, None, None, None);
         let mut icon = CursorIcon::Default;
         if self.prompt.is_none() {
             if self.edge_at(x).is_some() {
                 icon = CursorIcon::ColResize;
+            } else if self.agents_edge_at(x, y) {
+                icon = CursorIcon::RowResize;
             } else if self.files_rect().contains(x, y) {
                 file = self.files_row_at(y);
+            } else if self.agents_rect().contains(x, y) {
+                agent = self.agent_row_at(y);
             } else if self.sidebar_rect().contains(x, y) {
                 hover = self.sidebar_row_at(y);
             } else if self.pane_body_at(x, y).is_some() {
                 icon = CursorIcon::Text;
             }
             tab = self.tab_at(x, y);
-            if hover.is_some() || file.is_some() || tab.is_some() {
+            if hover.is_some() || file.is_some() || tab.is_some() || agent.is_some() {
                 icon = CursorIcon::Pointer;
             }
         }
-        if (hover, tab, file) != (self.hover, self.tab_hover, self.files_hover) {
-            (self.hover, self.tab_hover, self.files_hover) = (hover, tab, file);
+        if (hover, tab, file, agent) != (self.hover, self.tab_hover, self.files_hover, self.agents_hover) {
+            (self.hover, self.tab_hover, self.files_hover, self.agents_hover) = (hover, tab, file, agent);
             self.dirty = true;
         }
         self.set_cursor(icon);
@@ -107,6 +112,10 @@ impl App {
         }
         let free = self.prompt.is_none();
         let edge = self.edge_at(x);
+        if free && edge.is_none() && self.agents_edge_at(x, y) {
+            self.resizing = (b == MouseButton::Left).then_some(Edge::Agents);
+            return;
+        }
         if free && edge == Some(Edge::Files) {
             self.resizing = (b == MouseButton::Left).then_some(Edge::Files);
             return;
@@ -115,11 +124,18 @@ impl App {
             return self.files_click(b, x, y);
         }
         let in_sidebar = self.sidebar_rect().contains(x, y);
-        if free && in_sidebar && b == MouseButton::Right {
+        if free && in_sidebar && b == MouseButton::Right && !self.agents_rect().contains(x, y) {
             return self.open_sidebar_menu(self.sidebar_row_at(y), x, y);
         }
         if edge == Some(Edge::Sidebar) {
             self.resizing = (b == MouseButton::Left).then_some(Edge::Sidebar);
+            return;
+        }
+        if in_sidebar && self.agents_rect().contains(x, y) {
+            if b == MouseButton::Left {
+                self.agents_click(y);
+                self.update_hover(x, y);
+            }
             return;
         }
         if in_sidebar {
@@ -214,6 +230,10 @@ impl App {
         if self.files_rect().contains(x, y) {
             self.files_scroll(n);
             return self.on_cursor_moved(x, y);
+        }
+        if self.agents_rect().contains(x, y) {
+            self.agents_scroll(n);
+            return self.update_hover(x, y);
         }
         if self.sidebar_rect().contains(x, y) {
             let len = self.rows().len();

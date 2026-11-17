@@ -1419,6 +1419,7 @@ dependencies = [
  "cosmic-text",
  "libc",
  "pollster",
+ "regex",
  "serde",
  "serde_json",
  "toml",

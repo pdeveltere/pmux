@@ -65,12 +65,8 @@ impl App {
 
     /// Jump to the lowest-numbered pane waiting for the user.
     pub(super) fn next_attention(&mut self) {
-        let Some((id, v)) = self.panes.values().filter(|p| p.state() == Some(State::Waiting)).map(|p| (p.id, p.view.clone())).min() else { return };
-        self.open_view(v.clone());
-        if let Some(view) = self.views.get_mut(&v) {
-            view.reveal(id);
-        }
-        self.see_focused();
+        let Some(id) = self.panes.values().filter(|p| p.state() == Some(State::Waiting)).map(|p| p.id).min() else { return };
+        self.show_pane(id);
     }
 
     /// Focus the next/previous pane in the shown tab.

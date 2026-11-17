@@ -74,6 +74,7 @@ impl App {
                 Reply::ok("")
             }
             ["open", path] => self.api_open(me, path),
+            ["import", json] => self.api_import(json),
             ["new", rest @ ..] => {
                 let (tab, cmd) = match rest {
                     ["--tab", cmd @ ..] => (true, cmd),
@@ -89,6 +90,9 @@ impl App {
                     _ => return Reply::err(format!("state must be one of {STATUS_ARGS}")),
                 };
                 if let Some(p) = self.panes.get_mut(&id) {
+                    if p.state != state {
+                        p.state_at = std::time::Instant::now();
+                    }
                     p.state = state;
                 }
                 Reply::ok("")

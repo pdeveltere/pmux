@@ -238,6 +238,8 @@ impl TabHit {
 pub(super) enum Edge {
     Sidebar,
     Files,
+    /// The line between the workspace tree and the agents panel.
+    Agents,
 }
 
 #[cfg(test)]

@@ -1,0 +1,92 @@
+# Claude Code: state from its screen and window title.
+# Highest priority first wins. States: working, blocked (needs a person), idle, unknown (keep the last state).
+id = "claude"
+
+# Claude puts a spinner in the window title while a turn runs (braille, or half circles since 2.1.228),
+# and ✳ when it's waiting for the next message.
+[[rules]]
+id = "title_spinner"
+state = "working"
+priority = 1100
+region = "osc_title"
+regex = ['^[\x{2800}-\x{28FF}\x{25D0}-\x{25D3}] ']
+
+# Scrolling the transcript (ctrl+o): the live state isn't on screen.
+[[rules]]
+id = "transcript_viewer"
+state = "unknown"
+priority = 1000
+region = "bottom(3)"
+contains = ["showing detailed transcript"]
+
+# A form in place of the prompt box: selection lists, questions, MCP input.
+[[rules]]
+id = "form"
+state = "blocked"
+priority = 980
+region = "after_last_rule"
+contains = ["esc to cancel"]
+any = [
+  { contains = ["enter to confirm"] },
+  { contains = ["enter to select"] },
+  { contains = ["enter to submit"] },
+]
+
+# "✻ Pondering… (12s · esc to interrupt)" and the footer while a turn runs.
+[[rules]]
+id = "turn_running"
+state = "working"
+priority = 970
+region = "bottom(12)"
+any = [
+  { line_regex = ['^\s*[⏸⏵].*esc to interrupt'] },
+  { line_regex = ['^\s*[*·✢✳✶✻✽]\s+\S.*…'], not = [{ contains = ["esc to cancel"] }] },
+  { contains = ["esc to interrupt"] },
+]
+
+# The empty prompt box: ready for the next message.
+[[rules]]
+id = "prompt_box"
+state = "idle"
+priority = 950
+region = "prompt_box"
+line_regex = ['^\s*❯']
+not = [
+  { contains = ["enter to select"] },
+  { contains = ["esc to cancel"] },
+]
+
+# Permission prompts: "Do you want to proceed?" with numbered choices.
+[[rules]]
+id = "permission"
+state = "blocked"
+priority = 850
+region = "after_last_rule"
+any = [
+  { contains = ["do you want to"], line_regex = ['(?i)^\s*❯?\s*(?:1\.\s*)?yes\b'] },
+  { contains = ["would you like to"], line_regex = ['(?i)^\s*❯?\s*(?:1\.\s*)?yes\b'] },
+  { contains = ["do you want to proceed?", "esc to cancel"] },
+  { contains = ["tab to amend"] },
+  { contains = ["waiting for permission"] },
+  { contains = ["do you want to allow this connection?"] },
+]
+
+# Older layouts without a prompt box under the question.
+[[rules]]
+id = "permission_anywhere"
+state = "blocked"
+priority = 300
+region = "screen"
+any = [
+  { contains = ["do you want to proceed?", "esc to cancel"] },
+  { contains = ["waiting for permission"] },
+  { contains = ["review your answers"] },
+]
+not = [{ line_regex = ['^\s*❯\s*$'] }]
+
+[[rules]]
+id = "title_idle"
+state = "idle"
+priority = 250
+region = "osc_title"
+regex = ['^\x{2733} ']

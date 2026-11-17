@@ -82,3 +82,56 @@ pub fn agent_of(path: &str) -> Option<&'static str> {
         .into_iter()
         .find(|a| p.contains(a))
 }
+
+/// A process's command line.
+#[cfg(target_os = "macos")]
+pub fn proc_args(pid: i32) -> Vec<String> {
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut len = buf.len();
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, buf.as_mut_ptr() as *mut _, &mut len, std::ptr::null_mut(), 0) } != 0 || len < 4 {
+        return vec![];
+    }
+    // argc, the executable path, padding NULs, then argv.
+    let argc = i32::from_ne_bytes(buf[..4].try_into().unwrap()) as usize;
+    let rest = &buf[4..len];
+    let start = rest.iter().position(|b| *b == 0).map_or(rest.len(), |i| i);
+    let rest = &rest[start..];
+    let first = rest.iter().position(|b| *b != 0).unwrap_or(rest.len());
+    rest[first..].split(|b| *b == 0).take(argc).map(|s| String::from_utf8_lossy(s).into_owned()).collect()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn proc_args(pid: i32) -> Vec<String> {
+    std::fs::read(format!("/proc/{pid}/cmdline"))
+        .map(|b| b.split(|c| *c == 0).filter(|s| !s.is_empty()).map(|s| String::from_utf8_lossy(s).into_owned()).collect())
+        .unwrap_or_default()
+}
+
+/// A process's current folder.
+#[cfg(target_os = "macos")]
+pub fn proc_cwd(pid: i32) -> Option<std::path::PathBuf> {
+    let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as i32;
+    let n = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDVNODEPATHINFO, 0, &mut info as *mut _ as *mut _, size) };
+    if n != size {
+        return None;
+    }
+    let p = unsafe { std::ffi::CStr::from_ptr(info.pvi_cdir.vip_path.as_ptr() as *const _) };
+    Some(std::path::PathBuf::from(p.to_string_lossy().into_owned()))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn proc_cwd(pid: i32) -> Option<std::path::PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn own_args_and_cwd() {
+        let me = std::process::id() as i32;
+        assert!(!super::proc_args(me).is_empty());
+        assert_eq!(super::proc_cwd(me), std::env::current_dir().ok());
+    }
+}

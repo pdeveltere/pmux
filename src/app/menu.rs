@@ -27,7 +27,7 @@ impl App {
                     v.push(fold(self, proj_key(&pr.path)));
                 }
                 v.extend(path_items(&pr.path));
-                v.extend([sep(), item("Delete project", Action::Delete(Close::Project(w, p)))]);
+                v.extend([sep(), item("Close project", Action::Delete(Close::Project(w, p)))]);
                 v
             }
             Some(Row::Wt(w, p, t)) => {

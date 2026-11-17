@@ -1,12 +1,16 @@
 mod api;
 mod app;
 mod config;
+mod detect;
 mod editor;
 mod files;
 mod finder;
 mod git;
 mod gpu;
+mod hook;
+mod hold;
 mod icons;
+mod import;
 mod input;
 mod platform;
 mod pty;
@@ -46,6 +50,11 @@ usage:
   pmux project rm <dir|name> [--force] close a project (sidebar only; files untouched)
   pmux worktree rm <dir> [--force]     delete a linked worktree (git worktree remove)
   pmux guide                how agents should use pmux
+  pmux import herdr [--run] open Herdr's live terminals here (claude sessions resumed)
+  pmux integration install claude   let Claude report its session (for resume after restarts)
+
+Terminals keep running when the window closes. With no window open, the terminal
+commands (ls, read, send, status, title, new) still work.
 
 panes: %N, N, self, or a title
 
@@ -97,8 +106,9 @@ impl Runner {
     }
 
     fn shutdown(&mut self, el: &ActiveEventLoop) {
+        // Terminals keep running in the background pmux; the next window picks them up.
         if let Some(app) = self.app.as_mut() {
-            app.kill_all();
+            app.sync_layout();
         }
         let _ = std::fs::remove_file(&self.socket);
         el.exit();
@@ -121,7 +131,14 @@ impl ApplicationHandler<Ev> for Runner {
         app.h = size.height as f32;
         app.cell_w = fonts.cell_w;
         app.cell_h = fonts.cell_h;
-        app.open_cwd();
+        match app.attach() {
+            Ok(Some(view)) => app.open_view(view),
+            Ok(None) => app.open_cwd(),
+            Err(e) => {
+                app.say(e);
+                app.open_cwd();
+            }
+        }
         self.gpu = Some(gpu::Gpu::new(window.clone()));
         self.fonts = Some(fonts);
         self.app = Some(app);
@@ -187,6 +204,7 @@ impl ApplicationHandler<Ev> for Runner {
         let Some(w) = self.window.as_ref() else { return };
         if app.dirty {
             app.dirty = false;
+            app.sync_layout();
             w.set_cursor(app.cursor_icon);
             w.request_redraw();
         }
@@ -205,6 +223,12 @@ fn main() {
         None => run(),
         Some("-h" | "--help" | "help") => print!("{USAGE}"),
         Some("guide") => print!("{}", api::GUIDE),
+        Some("hold") => std::process::exit(hold::run()),
+        Some("import") => std::process::exit(import::main(&args[1..])),
+        Some("hook") => std::process::exit(hook::run(&args[1..])),
+        // Debugging agent manifests: `pmux detect claude [title] < screen.txt`
+        Some("detect") => std::process::exit(detect::cli(&args[1..])),
+        Some("integration") => std::process::exit(hook::integration(&args[1..])),
         Some(_) => std::process::exit(api::client(args)),
     }
 }

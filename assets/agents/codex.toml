@@ -1,0 +1,49 @@
+# Codex CLI: state from its screen and window title.
+id = "codex"
+
+[[rules]]
+id = "title_action_required"
+state = "blocked"
+priority = 1100
+region = "osc_title"
+contains = ["action required"]
+
+[[rules]]
+id = "title_spinner"
+state = "working"
+priority = 1050
+region = "osc_title"
+regex = ['(?:^| )[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)']
+
+# Approvals and questions.
+[[rules]]
+id = "approval"
+state = "blocked"
+priority = 900
+region = "bottom(20)"
+any = [
+  { contains = ["press enter to confirm or esc to cancel"] },
+  { contains = ["allow command?"] },
+  { contains = ["enter to submit answer"] },
+  { contains = ["would you like to"], line_regex = ['(?i)^\s*[›❯]?\s*1\.\s*yes'] },
+  { contains = ["[y/n]"] },
+]
+
+# "• Working (12s • esc to interrupt)"
+[[rules]]
+id = "turn_running"
+state = "working"
+priority = 800
+region = "bottom(12)"
+any = [
+  { contains = ["esc to interrupt"] },
+  { line_regex = ['^(?:[•◦]\s+)?\S.* \((?:\d+[hm] )*\d+s(?: • [^)]*)?\)'] },
+]
+
+# The composer is on screen and nothing above says otherwise.
+[[rules]]
+id = "composer"
+state = "idle"
+priority = 100
+region = "bottom(6)"
+line_regex = ['^\s*›']
