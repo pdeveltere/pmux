@@ -3,6 +3,8 @@ use crate::app::{Ev, Tx};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+/// Watches a set of paths on a background thread and sends an event when any changes.
+/// On macOS each path is a kqueue vnode watch; replacing the set wakes the thread to re-arm.
 pub struct Watcher {
     #[cfg(target_os = "macos")]
     kq: i32,

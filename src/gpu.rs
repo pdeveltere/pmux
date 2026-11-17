@@ -3,8 +3,10 @@
 use std::sync::Arc;
 use winit::window::Window;
 
+/// Glyph atlas side, in texels. When it fills up, `Fonts` drops every cache and the frame is redrawn.
 pub const ATLAS: u32 = 1024;
 
+/// `Inst::misc[0]` kinds: solid (optionally rounded) rect, alpha-mask glyph, color glyph (emoji).
 pub const RECT: f32 = 0.0;
 pub const MASK: f32 = 1.0;
 pub const COLOR: f32 = 2.0;
@@ -74,6 +76,7 @@ struct Out {
 }
 "#;
 
+/// The window surface plus the single pipeline, atlas and instance buffer every frame draws with.
 pub struct Gpu {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,

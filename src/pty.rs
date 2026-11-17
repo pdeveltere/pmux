@@ -1,3 +1,5 @@
+//! PTYs and processes: spawn a login shell on a new PTY, resize it, and see which program
+//! (agent) runs in its foreground. Unix only (openpty, process groups).
 use std::fs::File;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -5,6 +7,7 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command};
 
+/// A spawned shell: the PTY master (read output / write input) and the child process.
 pub struct Pty {
     pub master: File,
     pub child: Child,
@@ -14,6 +17,8 @@ fn ws(rows: u16, cols: u16) -> libc::winsize {
     libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 }
 }
 
+/// Open a PTY of `rows`×`cols` and start `$SHELL -l` in `cwd` on it, as the session leader with
+/// the PTY as its controlling terminal. `env` is added to the inherited environment.
 pub fn spawn(cwd: &Path, rows: u16, cols: u16, env: &[(&str, String)]) -> io::Result<Pty> {
     let (mut m, mut s) = (0, 0);
     let w = ws(rows, cols);
@@ -55,11 +60,13 @@ pub fn spawn(cwd: &Path, rows: u16, cols: u16, env: &[(&str, String)]) -> io::Re
     Ok(Pty { master, child })
 }
 
+/// Tell the PTY its new size (the kernel sends SIGWINCH to the foreground job).
 pub fn resize(f: &File, rows: u16, cols: u16, xpx: u16, ypx: u16) {
     let w = libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: xpx, ws_ypixel: ypx };
     unsafe { libc::ioctl(f.as_raw_fd(), libc::TIOCSWINSZ, &w) };
 }
 
+/// The terminal's foreground process group (the job that currently owns it).
 pub fn fg_pgrp(f: &File) -> i32 {
     unsafe { libc::tcgetpgrp(f.as_raw_fd()) }
 }
@@ -76,6 +83,7 @@ pub fn proc_path(pid: i32) -> Option<String> {
     std::fs::read_link(format!("/proc/{pid}/exe")).ok().map(|p| p.to_string_lossy().into_owned())
 }
 
+/// Which known coding agent an executable path belongs to, by name.
 pub fn agent_of(path: &str) -> Option<&'static str> {
     let p = path.to_ascii_lowercase();
     ["claude", "codex", "gemini", "opencode", "aider", "amp", "cursor-agent"]

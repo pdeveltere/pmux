@@ -34,6 +34,8 @@ enum EditKind {
     Other,
 }
 
+/// One open file. Every text change goes through `checkpoint`, which bumps `version`;
+/// derived state (highlights, search matches, `modified`) is recomputed lazily against it.
 pub struct Editor {
     pub path: PathBuf,
     pub lines: Vec<String>,
@@ -51,6 +53,8 @@ pub struct Editor {
     last_edit: Option<(EditKind, Instant)>,
     /// Lines as last saved, to tell whether the buffer is modified.
     saved: Vec<String>,
+    /// `modified()` as of a `version` (comparing every line each frame is O(file)).
+    modified_at: std::cell::Cell<(u64, bool)>,
     /// ⌘W pressed once on a modified buffer: the next one discards.
     pub close_armed: bool,
     /// Tree-sitter language, if we have one for this file.
@@ -120,6 +124,7 @@ impl Editor {
         Editor {
             path,
             saved: lines.clone(),
+            modified_at: std::cell::Cell::new((1, false)),
             lines,
             cur: Pos::default(),
             anchor: None,
@@ -155,13 +160,21 @@ impl Editor {
         self.lines.join(if self.crlf { "\r\n" } else { "\n" })
     }
 
+    /// Differs from the file as last saved (undoing back to it counts as unmodified).
     pub fn modified(&self) -> bool {
-        self.lines != self.saved
+        let (v, m) = self.modified_at.get();
+        if v == self.version {
+            return m;
+        }
+        let m = self.lines != self.saved;
+        self.modified_at.set((self.version, m));
+        m
     }
 
     pub fn save(&mut self) -> Result<(), String> {
         std::fs::write(&self.path, self.text()).map_err(|e| e.to_string())?;
         self.saved = self.lines.clone();
+        self.modified_at.set((self.version, false));
         self.close_armed = false;
         Ok(())
     }
@@ -764,6 +777,7 @@ mod tests {
         e.redo();
         e.redo();
         assert_eq!(e.text(), "    foo\n    bar");
+        assert!(e.modified(), "cached answer follows redo");
     }
 
     #[test]

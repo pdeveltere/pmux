@@ -6,6 +6,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
 
+/// Printed by `pmux guide`: how an agent running in a pane should use pmux.
 pub const GUIDE: &str = "pmux guide (for agents)
 
 You are running inside pmux if $PMUX=1. Your pane is $PMUX_PANE.
@@ -54,6 +55,8 @@ pub fn sock_dir() -> PathBuf {
     std::env::var_os("PMUX_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(format!("/tmp/pmux-{}", unsafe { libc::getuid() })))
 }
 
+/// Bind the window's API socket and serve it on a thread: each request goes to the event loop as
+/// `Ev::Api`, which sends the reply back. Fails if another window already has it.
 pub fn listen(tx: Tx) -> std::io::Result<PathBuf> {
     let dir = sock_dir();
     std::fs::create_dir_all(&dir)?;
@@ -113,6 +116,7 @@ fn connect() -> Option<UnixStream> {
     UnixStream::connect(p).or_else(|_| UnixStream::connect(hold_sock())).ok()
 }
 
+/// `pmux <cmd>`: send one request to the running window and print the reply. Returns the exit code.
 pub fn client(mut args: Vec<String>) -> i32 {
     // `open` takes a path relative to the caller's cwd; the app has its own cwd.
     if args.first().map(String::as_str) == Some("open") {

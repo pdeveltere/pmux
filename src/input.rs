@@ -32,6 +32,8 @@ pub fn base_char(k: &KeyEvent, m: M) -> Option<char> {
     Some(if m.shift_key() { c.to_ascii_uppercase() } else { c })
 }
 
+/// Bytes a key press sends to the PTY, as xterm encodes it. `app_cursor`: DECCKM is on
+/// (arrows send `ESC O x` instead of `ESC [ x`).
 pub fn encode(k: &KeyEvent, m: M, app_cursor: bool) -> Vec<u8> {
     let mut out = Vec::new();
     let csi = |s: &str| format!("\x1b[{s}").into_bytes();

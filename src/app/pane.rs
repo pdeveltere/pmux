@@ -43,6 +43,7 @@ impl State {
     }
 }
 
+/// A pane: a terminal (shell on a PTY) or, when `editor` is set, a file editor.
 pub struct Pane {
     pub id: u32,
     pub vt: Vt,
@@ -330,11 +331,17 @@ impl App {
         }
     }
 
-    pub(super) fn on_output(&mut self, id: u32, data: &[u8]) {
+    /// Feed a pane's output to its terminal. Returns whether the window needs a redraw: the pane
+    /// is in the shown view, or its state (the sidebar dot) changed.
+    pub(super) fn on_output(&mut self, id: u32, data: &[u8]) -> bool {
         let focused = self.focused();
         let shown = self.shown(id);
         let (cw, ch) = (self.cell_w as u16, self.cell_h as u16);
-        let Some(p) = self.panes.get_mut(&id) else { return };
+        let current = self.current.as_deref();
+        let Some(p) = self.panes.get_mut(&id) else { return false };
+        // Its view's tab bar shows its label and dot, even when it's in another tab.
+        let in_view = current == Some(p.view.as_path());
+        let before = p.state();
         let events = p.vt.feed(data);
         let now = Instant::now();
         if now - p.last_input > ECHO_GRACE {
@@ -362,6 +369,7 @@ impl App {
                 _ => {}
             }
         }
+        in_view || p.state() != before
     }
 
     /// Encode a mouse event for the pane's app (xterm / SGR).

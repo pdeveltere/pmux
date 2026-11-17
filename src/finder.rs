@@ -9,6 +9,7 @@ const WALK_CAP: usize = 100_000;
 /// Results kept per query.
 const MAX_RESULTS: usize = 200;
 
+/// One fuzzy match of the query against a file path.
 pub struct Match {
     /// Index into `Finder::files`.
     pub file: usize,
@@ -17,6 +18,7 @@ pub struct Match {
     score: i32,
 }
 
+/// State of the open ⌘P popup: the indexed files, the query, and its ranked matches.
 pub struct Finder {
     pub root: PathBuf,
     /// Paths relative to `root`, `/`-separated.
@@ -88,9 +90,17 @@ impl Finder {
 
 /// Files under `root`: git's view (tracked + untracked, minus ignored) in a repo, else a walk.
 fn list(root: &Path) -> Vec<String> {
-    let git = Command::new("git").arg("-C").arg(root).args(["ls-files", "-z", "-co", "--exclude-standard", "--deduplicate"]).output();
-    if let Some(o) = git.ok().filter(|o| o.status.success()) {
-        return String::from_utf8_lossy(&o.stdout).split('\0').filter(|s| !s.is_empty() && root.join(s).is_file()).map(String::from).collect();
+    let git = |args: &[&str]| {
+        let o = Command::new("git").arg("-C").arg(root).args(args).output().ok().filter(|o| o.status.success())?;
+        Some(String::from_utf8_lossy(&o.stdout).split('\0').filter(|s| !s.is_empty()).map(String::from).collect::<Vec<_>>())
+    };
+    if let Some(files) = git(&["ls-files", "-z", "-co", "--exclude-standard", "--deduplicate"]) {
+        // Drop what isn't an openable file, without a stat per file: tracked files deleted from
+        // disk, and submodules (gitlinks, mode 160000).
+        let mut gone: std::collections::HashSet<String> = git(&["ls-files", "-z", "-d"]).unwrap_or_default().into_iter().collect();
+        let staged = git(&["ls-files", "-z", "-s"]).unwrap_or_default();
+        gone.extend(staged.iter().filter(|l| l.starts_with("160000 ")).filter_map(|l| Some(l.split_once('\t')?.1.to_string())));
+        return files.into_iter().filter(|f| !gone.contains(f)).collect();
     }
     let mut out = vec![];
     walk(root, root, &mut out);

@@ -8,6 +8,7 @@ const MACOS: bool = cfg!(target_os = "macos");
 /// Menu label for `reveal`.
 pub const REVEAL_LABEL: &str = if MACOS { "Reveal in Finder" } else { "Open folder" };
 
+/// Clipboard text (`pbpaste`, else `wl-paste` / `xclip`).
 pub fn clipboard_get() -> Option<String> {
     let cmds: &[&[&str]] = if MACOS { &[&["pbpaste"]] } else { &[&["wl-paste", "-n"], &["xclip", "-o", "-selection", "clipboard"]] };
     cmds.iter().find_map(|c| {
@@ -16,6 +17,7 @@ pub fn clipboard_get() -> Option<String> {
     })
 }
 
+/// Put `s` on the clipboard (`pbcopy`, else `wl-copy` / `xclip`).
 pub fn clipboard_set(s: &str) {
     let cmds: &[&[&str]] = if MACOS { &[&["pbcopy"]] } else { &[&["wl-copy"], &["xclip", "-selection", "clipboard"]] };
     for c in cmds {

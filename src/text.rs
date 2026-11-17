@@ -15,6 +15,7 @@ pub struct Glyph {
     pub color: bool,
 }
 
+/// RGBA pixels waiting to be copied into the atlas at (x, y) by the renderer.
 pub struct Upload {
     pub x: u32,
     pub y: u32,
@@ -33,6 +34,8 @@ pub struct Shaped {
 /// A terminal cell's glyph: cache key and its offset within the cell.
 type CellGlyph = (CacheKey, i32, i32);
 
+/// Font state and every glyph cache. All caches and the atlas are dropped together on `reset`
+/// (zoom, scale change) or when the atlas overflows.
 pub struct Fonts {
     fs: FontSystem,
     swash: SwashCache,
@@ -45,8 +48,14 @@ pub struct Fonts {
     pub baseline: f32,
     /// (char, style) → glyph key and offset; `None` when no font has it.
     cells: HashMap<(char, u8), Option<CellGlyph>>,
+    /// Fast path for ASCII cells, indexed `style * 128 + char`: the finished glyph, so drawing a
+    /// terminal of plain text does no hashing. Outer `None` = not looked up yet.
+    ascii: Vec<Option<Option<(Glyph, i32, i32)>>>,
     glyphs: HashMap<CacheKey, Option<Glyph>>,
-    shaped: HashMap<(String, u32, bool, bool), Rc<Shaped>>,
+    /// Shaped UI strings by (px, bold, mono), then text: looked up by `&str`, so a cache hit
+    /// doesn't allocate. `shaped_n` counts the strings, to bound the cache.
+    shaped: HashMap<(u32, bool, bool), HashMap<String, Rc<Shaped>>>,
+    shaped_n: usize,
     icons: HashMap<(usize, u32), Option<Glyph>>,
     // Shelf packer state.
     sx: u32,
@@ -96,8 +105,10 @@ impl Fonts {
             cell_h: 16.0,
             baseline: 12.0,
             cells: HashMap::new(),
+            ascii: vec![None; 4 * 128],
             glyphs: HashMap::new(),
             shaped: HashMap::new(),
+            shaped_n: 0,
             icons: HashMap::new(),
             sx: 0,
             sy: 0,
@@ -124,8 +135,10 @@ impl Fonts {
     /// Recompute cell metrics and drop every cache (scale or font size changed).
     pub fn reset(&mut self) {
         self.cells.clear();
+        self.ascii.fill(None);
         self.glyphs.clear();
         self.shaped.clear();
+        self.shaped_n = 0;
         self.icons.clear();
         self.swash = SwashCache::new();
         self.sx = 0;
@@ -166,6 +179,18 @@ impl Fonts {
 
     /// Glyph for one terminal cell. `style`: bit 0 bold, bit 1 italic.
     pub fn cell(&mut self, c: char, style: u8) -> Option<(Glyph, i32, i32)> {
+        let slot = (c.is_ascii() && style < 4).then(|| style as usize * 128 + c as usize);
+        if let Some(hit) = slot.and_then(|i| self.ascii[i]) {
+            return hit;
+        }
+        let g = self.cell_slow(c, style);
+        if let (Some(i), false) = (slot, self.overflowed) {
+            self.ascii[i] = Some(g);
+        }
+        g
+    }
+
+    fn cell_slow(&mut self, c: char, style: u8) -> Option<(Glyph, i32, i32)> {
         let k = match self.cells.get(&(c, style)) {
             Some(k) => *k,
             None => {
@@ -182,15 +207,17 @@ impl Fonts {
 
     pub fn ui(&mut self, s: &str, pt: f32, bold: bool, mono: bool) -> Rc<Shaped> {
         let px = (pt * UI_SCALE * self.scale).round();
-        let key = (s.to_string(), px.to_bits(), bold, mono);
-        if let Some(r) = self.shaped.get(&key) {
+        let key = (px.to_bits(), bold, mono);
+        if let Some(r) = self.shaped.get(&key).and_then(|m| m.get(s)) {
             return r.clone();
         }
-        if self.shaped.len() > 4000 {
+        if self.shaped_n > 4000 {
             self.shaped.clear();
+            self.shaped_n = 0;
         }
         let r = Rc::new(self.shape(s, px, mono, bold, false));
-        self.shaped.insert(key, r.clone());
+        self.shaped.entry(key).or_default().insert(s.to_string(), r.clone());
+        self.shaped_n += 1;
         r
     }
 

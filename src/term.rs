@@ -36,6 +36,8 @@ impl Dimensions for Size {
     }
 }
 
+/// A terminal emulator: grid + scrollback (10k lines) and the escape-sequence parser.
+/// Events the terminal raises while parsing (replies, title, bell) come back from `feed`.
 pub struct Vt {
     pub term: Term<Listener>,
     parser: Processor<StdSyncHandler>,

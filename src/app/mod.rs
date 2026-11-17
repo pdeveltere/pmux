@@ -138,22 +138,37 @@ pub struct App {
     /// One `git status` at a time; `status_again` re-runs it when changes arrived meanwhile.
     status_busy: bool,
     status_again: bool,
+    /// Why the config file couldn't be loaded; while set, `save` leaves the file alone.
+    config_error: Option<String>,
 }
 
 impl App {
     pub fn new(tx: Tx, socket: PathBuf) -> Self {
-        let cfg = config::load().unwrap_or_else(|| {
+        let default = || {
             let cwd = std::env::current_dir().unwrap_or_default();
-            let c = config::Config { workspace: vec![config::WsCfg { name: "default".into(), projects: vec![cwd.display().to_string()] }] };
-            config::save(&c);
-            c
-        });
+            config::Config { workspace: vec![config::WsCfg { name: "default".into(), projects: vec![cwd.display().to_string()] }] }
+        };
+        // A config we can't parse is left alone (not overwritten) until the user fixes it.
+        let (cfg, config_error) = match config::load() {
+            Ok(Some(c)) => (c, None),
+            Ok(None) => {
+                let c = default();
+                config::save(&c);
+                (c, None)
+            }
+            Err(e) => {
+                eprintln!("pmux: config: {e}");
+                (default(), Some(e))
+            }
+        };
         let workspaces = cfg
             .workspace
             .into_iter()
             .map(|w| Workspace { name: w.name, projects: w.projects.iter().filter_map(|p| Project::open(&config::expand(p))).collect() })
             .collect();
+        let flash = config_error.as_ref().map(|e| (format!("config not loaded (changes won't be saved): {e}"), Instant::now()));
         let app = App {
+            config_error,
             workspaces,
             views: HashMap::new(),
             panes: HashMap::new(),
@@ -172,7 +187,7 @@ impl App {
             prefix: false,
             prompt: None,
             folded: HashSet::new(),
-            flash: None,
+            flash,
             w: 1200.0,
             h: 800.0,
             scale: 1.0,
@@ -214,10 +229,12 @@ impl App {
     }
 
     pub fn handle(&mut self, ev: Ev) {
-        self.dirty = true;
+        // Output decides for itself: a pane that isn't on screen only redraws when its sidebar
+        // dot changes (agents in background worktrees animate constantly).
+        self.dirty |= !matches!(ev, Ev::Hold(crate::hold::Msg::Output(..)));
         match ev {
             Ev::Hold(m) => match m {
-                crate::hold::Msg::Output(id, data) => self.on_output(id, &data),
+                crate::hold::Msg::Output(id, data) => self.dirty |= self.on_output(id, &data),
                 crate::hold::Msg::Exit(id) => self.on_exit(id),
                 crate::hold::Msg::Agent(id, a) => {
                     if let Some(p) = self.panes.get_mut(&id) {
@@ -265,7 +282,11 @@ impl App {
 
     // ---- persistence and watching ----
 
+    /// Persist workspaces and projects (not while the config on disk failed to load).
     fn save(&self) {
+        if self.config_error.is_some() {
+            return;
+        }
         let c = config::Config {
             workspace: self
                 .workspaces

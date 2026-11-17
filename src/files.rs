@@ -9,6 +9,7 @@ use std::time::Instant;
 /// Hidden like Zed's default `file_scan_exclusions`.
 const EXCLUDE: &[&str] = &[".git", ".svn", ".hg", "CVS", ".DS_Store", "Thumbs.db"];
 
+/// One visible explorer row.
 pub struct Entry {
     pub path: PathBuf,
     pub name: String,
@@ -16,6 +17,7 @@ pub struct Entry {
     pub depth: usize,
 }
 
+/// The file tree of one view root: which folders are open, the flattened rows, selection and scroll.
 pub struct Explorer {
     pub root: PathBuf,
     /// Expanded folders.

@@ -2,6 +2,7 @@
 use super::{Action, App, TabHit};
 
 // Layout, in logical px (multiplied by the scale factor).
+/// Sidebar default width.
 pub const SIDEBAR_W: f32 = 250.0;
 /// Tree row: Zed's project panel entry, a 24px (`h_6`) label box inside a 1px border.
 pub const ROW_H: f32 = 26.0;
@@ -9,8 +10,11 @@ pub const ROW_H: f32 = 26.0;
 pub const INDENT: f32 = 20.0;
 /// UI icon size, in points.
 pub const ICON_PT: f32 = 14.0;
+/// Status bar height.
 pub const STATUS_H: f32 = 26.0;
+/// Padding between a pane's column and its cell grid.
 pub const PAD: f32 = 8.0;
+/// Tab bar height.
 pub const TAB_H: f32 = 32.0;
 /// Sidebar / explorer title header height (matches the tab bar).
 pub const PANEL_HEADER_H: f32 = TAB_H;
@@ -123,6 +127,7 @@ impl Tree {
     }
 }
 
+/// Where a pane of the shown tab sits.
 pub struct PaneRect {
     pub id: u32,
     /// The whole column: focus/click target.
