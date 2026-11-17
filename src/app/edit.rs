@@ -5,12 +5,16 @@ use crate::{input, platform};
 use std::path::Path;
 use std::time::{Duration, Instant};
 use winit::event::KeyEvent;
-use winit::keyboard::NamedKey;
+use winit::keyboard::{ModifiersState, NamedKey};
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+/// Height of the find bar, in logical pixels.
+pub const SEARCH_BAR_H: f32 = 38.0;
 
 /// Where an editor's parts go inside its pane body.
 pub struct EditorGeom {
+    /// The find bar across the top, when open.
+    pub bar: Option<R>,
     /// Line numbers, right-aligned.
     pub gutter: R,
     /// The text grid.
@@ -21,13 +25,18 @@ pub struct EditorGeom {
 
 impl App {
     pub fn editor_geom(&self, body: R, ed: &Editor) -> EditorGeom {
+        let bar = ed.search.as_ref().map(|_| R { h: self.px(SEARCH_BAR_H).min(body.h), ..body });
+        let body = match bar {
+            Some(b) => R { y: body.y + b.h, h: (body.h - b.h).max(0.0), ..body },
+            None => body,
+        };
         let digits = ed.lines.len().max(100).to_string().len() as f32;
         let gw = ((digits + 3.0) * self.cell_w).round();
         let gutter = R { w: gw.min(body.w), ..body };
         let text = R { x: body.x + gutter.w, w: (body.w - gutter.w).max(0.0), ..body };
         let rows = ((text.h / self.cell_h).floor() as usize).max(1);
         let cols = ((text.w / self.cell_w).floor() as usize).max(1);
-        EditorGeom { gutter, text, rows, cols }
+        EditorGeom { bar, gutter, text, rows, cols }
     }
 
     /// Open `p` in an editor tab of the current view, or show the tab that already has it.
@@ -70,6 +79,7 @@ impl App {
         let g = self.editor_geom(pr.body, ed);
         if let Some(ed) = self.panes.get_mut(&id).and_then(|p| p.editor.as_mut()) {
             ed.refresh_highlight();
+            ed.refresh_search();
             ed.reveal(g.rows, g.cols);
         }
     }
@@ -81,7 +91,13 @@ impl App {
 
     pub(super) fn editor_paste(&mut self, s: &str) {
         if let Some(e) = self.focused_editor() {
-            e.insert(s);
+            match &e.search {
+                Some(f) if f.focused => {
+                    let q = format!("{}{}", f.query, s.lines().next().unwrap_or(""));
+                    e.set_query(q);
+                }
+                _ => e.insert(s),
+            }
         }
         self.reveal_cursor();
     }
@@ -92,6 +108,9 @@ impl App {
         let (shift, alt) = (m.shift_key(), m.alt_key());
         let page = self.page_rows();
         let Some(e) = self.focused_editor() else { return };
+        if e.search.as_ref().is_some_and(|s| s.focused) {
+            return self.search_key(k);
+        }
         let word = |a: Move, b: Move| if alt { a } else { b };
         match input::named(k) {
             Some(NamedKey::ArrowLeft) => e.move_to(word(Move::WordLeft, Move::Left), shift),
@@ -107,6 +126,7 @@ impl App {
             Some(NamedKey::Enter) => e.newline(),
             Some(NamedKey::Tab) if shift => e.indent(-1),
             Some(NamedKey::Tab) => e.tab(),
+            Some(NamedKey::Escape) if e.search.is_some() => e.close_search(),
             Some(NamedKey::Escape) => e.clear_selection(),
             _ if m.control_key() => return,
             _ => match &k.text {
@@ -117,33 +137,73 @@ impl App {
         self.reveal_cursor();
     }
 
+    /// A key without ⌘ while the find bar has the keyboard.
+    fn search_key(&mut self, k: &KeyEvent) {
+        let (shift, alt, ctrl) = (self.mods.shift_key(), self.mods.alt_key(), self.mods.control_key());
+        let Some(e) = self.focused_editor() else { return };
+        let Some(q) = e.search.as_ref().map(|s| s.query.clone()) else { return };
+        match input::named(k) {
+            // Esc closes the bar, leaving the match selected.
+            Some(NamedKey::Escape) => e.close_search(),
+            Some(NamedKey::Enter) => e.find_step(!shift),
+            Some(NamedKey::Backspace) => {
+                let mut q = q;
+                if alt {
+                    let t = q.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '_').len();
+                    q.truncate(q[..t].trim_end_matches(|c: char| c.is_alphanumeric() || c == '_').len());
+                } else {
+                    q.pop();
+                }
+                e.set_query(q);
+            }
+            _ if ctrl => return,
+            _ => match &k.text {
+                Some(t) if !t.chars().any(char::is_control) => e.set_query(q + t),
+                _ => return,
+            },
+        }
+        self.reveal_cursor();
+    }
+
     /// ⌘ shortcuts the editor handles. Returns false for the app's own.
     pub(super) fn editor_cmd_key(&mut self, k: &KeyEvent, ch: Option<char>) -> bool {
-        let shift = self.mods.shift_key();
+        let (shift, alt) = (self.mods.shift_key(), self.mods.alt_key());
         let Some(e) = self.focused_editor() else { return false };
+        // While the find bar has the keyboard, text shortcuts don't reach the buffer.
+        let finding = e.search.as_ref().is_some_and(|s| s.focused);
         let mut flash = None;
-        match (input::named(k), ch.map(|c| c.to_ascii_lowercase())) {
-            (Some(NamedKey::ArrowLeft), _) => e.move_to(Move::Home, shift),
-            (Some(NamedKey::ArrowRight), _) => e.move_to(Move::End, shift),
-            (Some(NamedKey::ArrowUp), _) => e.move_to(Move::DocStart, shift),
-            (Some(NamedKey::ArrowDown), _) => e.move_to(Move::DocEnd, shift),
-            (Some(NamedKey::Backspace), _) => e.delete(Move::Home),
-            (Some(NamedKey::Delete), _) => e.delete(Move::End),
-            (_, Some('s')) => {
+        match (input::named(k), input::base_char(k, ModifiersState::empty()), ch.map(|c| c.to_ascii_lowercase())) {
+            // Find bar: ⌘F open/focus, ⌘G / ⌘⇧G next/previous, ⌥⌘C match case.
+            (_, Some('f'), _) => e.open_search(),
+            (_, Some('g'), _) if e.search.is_some() => e.find_step(!shift),
+            (_, Some('g'), _) => e.open_search(),
+            (_, Some('c'), _) if alt && e.search.is_some() => e.toggle_case(),
+            (_, _, Some('s')) => {
                 let name = e.name();
                 flash = Some(match e.save() {
                     Ok(()) => format!("saved {name}"),
                     Err(err) => format!("couldn't save {name}: {err}"),
                 });
             }
-            (_, Some('z')) if shift => e.redo(),
-            (_, Some('z')) => e.undo(),
-            (_, Some('y')) => e.redo(),
-            (_, Some('a')) => e.select_all(),
-            (_, Some('c')) => platform::clipboard_set(&e.copy()),
-            (_, Some('x')) => platform::clipboard_set(&e.cut()),
-            (_, Some(']')) => e.indent(1),
-            (_, Some('[')) => e.indent(-1),
+            (Some(NamedKey::Backspace), _, _) if finding => e.set_query(String::new()),
+            (_, _, Some('c')) if finding => platform::clipboard_set(&e.search.as_ref().map(|s| s.query.clone()).unwrap_or_default()),
+            (Some(NamedKey::ArrowLeft | NamedKey::ArrowRight | NamedKey::ArrowUp | NamedKey::ArrowDown | NamedKey::Delete), _, _)
+            | (_, _, Some('z' | 'y' | 'a' | 'x' | ']' | '['))
+                if finding => {}
+            (Some(NamedKey::ArrowLeft), _, _) => e.move_to(Move::Home, shift),
+            (Some(NamedKey::ArrowRight), _, _) => e.move_to(Move::End, shift),
+            (Some(NamedKey::ArrowUp), _, _) => e.move_to(Move::DocStart, shift),
+            (Some(NamedKey::ArrowDown), _, _) => e.move_to(Move::DocEnd, shift),
+            (Some(NamedKey::Backspace), _, _) => e.delete(Move::Home),
+            (Some(NamedKey::Delete), _, _) => e.delete(Move::End),
+            (_, _, Some('z')) if shift => e.redo(),
+            (_, _, Some('z')) => e.undo(),
+            (_, _, Some('y')) => e.redo(),
+            (_, _, Some('a')) => e.select_all(),
+            (_, _, Some('c')) => platform::clipboard_set(&e.copy()),
+            (_, _, Some('x')) => platform::clipboard_set(&e.cut()),
+            (_, _, Some(']')) => e.indent(1),
+            (_, _, Some('[')) => e.indent(-1),
             _ => return false,
         }
         if let Some(f) = flash {
@@ -169,6 +229,17 @@ impl App {
 
     /// Left press in an editor: place the cursor, shift extends, double-click selects a word.
     pub(super) fn editor_press(&mut self, id: u32, x: f32, y: f32) {
+        // A click on the find bar gives it the keyboard; one on the text takes it back.
+        let on_bar = self.layout().into_iter().find(|p| p.id == id).and_then(|pr| {
+            let ed = self.panes.get(&id)?.editor.as_ref()?;
+            Some(self.editor_geom(pr.body, ed).bar?.contains(x, y))
+        });
+        if let Some(s) = self.panes.get_mut(&id).and_then(|p| p.editor.as_mut()).and_then(|e| e.search.as_mut()) {
+            s.focused = on_bar == Some(true);
+        }
+        if on_bar == Some(true) {
+            return;
+        }
         let Some(p) = self.editor_pos_at(id, x, y) else { return };
         let shift = self.mods.shift_key();
         let now = Instant::now();

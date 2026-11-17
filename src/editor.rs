@@ -60,6 +60,22 @@ pub struct Editor {
     /// Bumped on every text change.
     version: u64,
     hl_version: u64,
+    /// The find bar (⌘F), when open.
+    pub search: Option<Search>,
+}
+
+/// In-file search, as Zed's buffer search bar: incremental, all matches highlighted.
+pub struct Search {
+    pub query: String,
+    /// Match case (off by default, as in Zed).
+    pub case: bool,
+    /// The bar has the keyboard (else the text does, with the bar still open).
+    pub focused: bool,
+    /// Where the cursor was when the query last changed from empty: typing searches from here.
+    origin: Pos,
+    /// Matches as `[start, end)` per line, ordered, as of `version`.
+    pub matches: Vec<(Pos, Pos)>,
+    version: u64,
 }
 
 fn byte(s: &str, col: usize) -> usize {
@@ -119,6 +135,7 @@ impl Editor {
             hl: vec![],
             version: 1,
             hl_version: 0,
+            search: None,
         }
     }
 
@@ -574,6 +591,87 @@ impl Editor {
         self.version += 1;
     }
 
+    // ---- search ----
+
+    /// ⌘F: open the find bar (or focus it), seeded with a one-line selection.
+    pub fn open_search(&mut self) {
+        let seed = self.selected_text().filter(|t| !t.contains('\n'));
+        let origin = self.selection().map_or(self.cur, |(a, _)| a);
+        let s = self.search.get_or_insert_with(|| Search { query: String::new(), case: false, focused: true, origin, matches: vec![], version: 0 });
+        s.focused = true;
+        s.origin = origin;
+        if let Some(q) = seed {
+            s.query = q;
+        }
+        s.version = 0;
+        self.refresh_search();
+    }
+
+    pub fn close_search(&mut self) {
+        self.search = None;
+    }
+
+    /// Recompute matches if the text or query changed.
+    pub fn refresh_search(&mut self) {
+        let Some(s) = &mut self.search else { return };
+        if s.version == self.version {
+            return;
+        }
+        s.version = self.version;
+        s.matches = find_all(&self.lines, &s.query, s.case);
+    }
+
+    /// Change the query (typing in the bar): select the first match from where the search began.
+    pub fn set_query(&mut self, q: String) {
+        let here = self.selection().map_or(self.cur, |(a, _)| a);
+        let Some(s) = &mut self.search else { return };
+        if s.query.is_empty() {
+            s.origin = here;
+        }
+        s.query = q;
+        s.version = 0;
+        let origin = s.origin;
+        self.refresh_search();
+        self.select_match(origin, true);
+    }
+
+    pub fn toggle_case(&mut self) {
+        let Some(s) = &mut self.search else { return };
+        s.case = !s.case;
+        let q = s.query.clone();
+        self.set_query(q);
+    }
+
+    /// Select the next match (`forward`) or the previous one, wrapping around.
+    pub fn find_step(&mut self, forward: bool) {
+        self.refresh_search();
+        let from = self.selection().map_or(self.cur, |(a, _)| a);
+        if forward {
+            self.select_match(Pos::new(from.line, from.col + 1), true);
+        } else {
+            self.select_match(from, false);
+        }
+    }
+
+    /// Select the first match starting at/after `p` (`forward`), or the last before `p`.
+    fn select_match(&mut self, p: Pos, forward: bool) {
+        let Some(s) = &self.search else { return };
+        let m = &s.matches;
+        let hit = if forward { m.iter().find(|(a, _)| *a >= p).or(m.first()) } else { m.iter().rev().find(|(a, _)| *a < p).or(m.last()) };
+        if let Some(&(a, b)) = hit {
+            self.anchor = Some(a);
+            self.cur = b;
+            self.want_x = None;
+        }
+    }
+
+    /// The selected match's 1-based number, if the selection is one.
+    pub fn match_index(&self) -> Option<usize> {
+        let s = self.search.as_ref()?;
+        let sel = self.selection()?;
+        s.matches.binary_search(&sel).ok().map(|i| i + 1)
+    }
+
     // ---- scrolling ----
 
     /// Keep the cursor inside a `rows` × `cols` viewport, with a small margin.
@@ -603,6 +701,29 @@ impl Editor {
     fn clamp_top(&mut self) {
         self.top = self.top.min(self.lines.len().saturating_sub(1));
     }
+}
+
+/// Every occurrence of `q` in `lines`, non-overlapping, as char positions. Matches never span lines.
+fn find_all(lines: &[String], q: &str, case: bool) -> Vec<(Pos, Pos)> {
+    let fold = |c: char| if case { c } else { c.to_lowercase().next().unwrap_or(c) };
+    let q: Vec<char> = q.chars().map(fold).collect();
+    let mut out = vec![];
+    if q.is_empty() {
+        return out;
+    }
+    for (l, line) in lines.iter().enumerate() {
+        let cs: Vec<char> = line.chars().map(fold).collect();
+        let mut i = 0;
+        while i + q.len() <= cs.len() {
+            if cs[i..i + q.len()] == q[..] {
+                out.push((Pos::new(l, i), Pos::new(l, i + q.len())));
+                i += q.len();
+            } else {
+                i += 1;
+            }
+        }
+    }
+    out
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -713,5 +834,40 @@ mod tests {
         let mut e = ed("héllo wörld");
         e.select_word(Pos::new(0, 8));
         assert_eq!(e.selected_text().unwrap(), "wörld");
+    }
+
+    #[test]
+    fn search_steps_and_wraps() {
+        let mut e = ed("Foo foo\nbar FOO");
+        e.set_cursor(Pos::new(0, 2), false);
+        e.open_search();
+        e.set_query("foo".into());
+        assert_eq!(e.search.as_ref().unwrap().matches.len(), 3);
+        assert_eq!(e.selection(), Some((Pos::new(0, 4), Pos::new(0, 7))), "first match from the cursor");
+        assert_eq!(e.match_index(), Some(2));
+        e.find_step(true);
+        assert_eq!(e.selection(), Some((Pos::new(1, 4), Pos::new(1, 7))));
+        e.find_step(true);
+        assert_eq!(e.match_index(), Some(1), "wraps to the start");
+        e.find_step(false);
+        assert_eq!(e.match_index(), Some(3), "wraps to the end");
+        e.toggle_case();
+        assert_eq!(e.search.as_ref().unwrap().matches.len(), 1);
+        e.set_query("fooo".into());
+        assert!(e.search.as_ref().unwrap().matches.is_empty());
+    }
+
+    #[test]
+    fn search_seeds_from_selection_and_tracks_edits() {
+        let mut e = ed("ab ab");
+        e.set_cursor(Pos::new(0, 0), false);
+        e.set_cursor(Pos::new(0, 2), true);
+        e.open_search();
+        assert_eq!(e.search.as_ref().unwrap().query, "ab");
+        assert_eq!(e.match_index(), Some(1));
+        e.set_cursor(Pos::new(0, 5), false);
+        e.type_str(" ab");
+        e.refresh_search();
+        assert_eq!(e.search.as_ref().unwrap().matches.len(), 3);
     }
 }

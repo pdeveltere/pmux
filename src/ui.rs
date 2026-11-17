@@ -37,6 +37,8 @@ const DRAG_TINT: C = [0x5b as f32 / 255.0 * 0.12, 0x9b as f32 / 255.0 * 0.12, 0.
 const CURSOR: C = rgb(0xd8, 0xd8, 0xd8);
 /// Editor: the cursor's line.
 const CURRENT_LINE: C = rgb(0x22, 0x22, 0x27);
+/// Editor: a search match, Zed One Dark's #74ade8 at 40% (premultiplied alpha).
+const MATCH: C = [0x74 as f32 / 255.0 * 0.4, 0xad as f32 / 255.0 * 0.4, 0xe8 as f32 / 255.0 * 0.4, 0.4];
 
 const ANSI: [(u8, u8, u8); 16] = [
     (0x1c, 0x1c, 0x20),
@@ -637,6 +639,7 @@ fn editor(app: &App, p: &mut Painter, ed: &crate::editor::Editor, body: R, focus
     let (cw, ch) = (app.cell_w, app.cell_h);
     let base = p.fonts.baseline;
     let sel = ed.selection();
+    let matches = ed.search.as_ref().map_or(&[][..], |s| &s.matches[..]);
     let end = (ed.top + g.rows + 1).min(ed.lines.len());
     let mut glyphs: Vec<(char, u8, f32, f32, C)> = Vec::new();
     for l in ed.top..end {
@@ -646,7 +649,16 @@ fn editor(app: &App, p: &mut Painter, ed: &crate::editor::Editor, body: R, focus
         }
         let here = l == ed.cur.line;
         if here && sel.is_none() {
-            p.rect(R { y, h: ch, ..body }, CURRENT_LINE);
+            p.rect(R { y, h: ch, w: g.gutter.w + g.text.w, ..g.gutter }, CURRENT_LINE);
+        }
+        // Search matches on this line (the selected one shows as the selection).
+        let first = matches.partition_point(|(a, _)| a.line < l);
+        for (a, b) in matches[first..].iter().take_while(|(a, _)| a.line == l) {
+            let (x0, x1) = (ed.x_of(*a), ed.x_of(*b));
+            let (x0, x1) = (x0.max(ed.left) - ed.left, x1.saturating_sub(ed.left).min(g.cols));
+            if x1 > x0 {
+                p.rect(R { x: g.text.x + x0 as f32 * cw, y, w: (x1 - x0) as f32 * cw, h: ch }, MATCH);
+            }
         }
         // Selection on this line: [a, b) in display cells, plus one cell for the newline.
         if let Some((a, b)) = sel.filter(|(a, b)| (a.line..=b.line).contains(&l)) {
@@ -686,14 +698,49 @@ fn editor(app: &App, p: &mut Painter, ed: &crate::editor::Editor, body: R, focus
             p.glyph(gl, x + gx as f32, y + gy as f32, fg);
         }
     }
-    // Bar cursor; hidden when the pane isn't focused (as in Zed).
+    let finding = ed.search.as_ref().is_some_and(|s| s.focused);
+    if let (Some(bar), Some(s)) = (g.bar, &ed.search) {
+        search_bar(app, p, ed, s, bar, focus);
+    }
+    // Bar cursor; hidden when the pane or the find bar has the keyboard (as in Zed).
     let cx = ed.x_of(ed.cur);
-    if focus && ed.cur.line >= ed.top && cx >= ed.left && cx <= ed.left + g.cols {
+    if focus && !finding && ed.cur.line >= ed.top && cx >= ed.left && cx <= ed.left + g.cols {
         let y = g.text.y + (ed.cur.line - ed.top) as f32 * ch;
         if y < body.y + body.h {
             p.rect(R { x: g.text.x + (cx - ed.left) as f32 * cw, y, w: app.px(2.0), h: ch }, ACCENT);
         }
     }
+}
+
+/// The find bar over an editor: query field, match-case toggle, match count.
+fn search_bar(app: &App, p: &mut Painter, ed: &crate::editor::Editor, s: &crate::editor::Search, bar: R, focus: bool) {
+    let line = app.hairline();
+    p.rect(bar, SIDEBAR);
+    p.rect(R { y: bar.y + bar.h - line, h: line, ..bar }, BORDER);
+    let pad = app.px(8.0);
+    let field = R { x: bar.x + pad, y: bar.y + app.px(6.0), w: app.px(320.0).min(bar.w * 0.6), h: bar.h - app.px(12.0) };
+    let active = focus && s.focused;
+    let none = !s.query.is_empty() && s.matches.is_empty();
+    p.rect(field, BG);
+    p.outline(field, line, if none { DANGER } else if active { ACCENT } else { BORDER });
+    let tx = field.x + app.px(8.0);
+    let tr = R { x: tx, w: field.w - app.px(16.0), ..field };
+    let w = if s.query.is_empty() { p.text("Search…", tr, 13.0, FAINT, false).min(0.0) } else { p.text(&s.query, tr, 13.0, TEXT, false) };
+    if active {
+        p.rect(R { x: (tx + w).min(field.x + field.w - app.px(6.0)), y: field.y + app.px(5.0), w: app.px(1.5), h: field.h - app.px(10.0) }, TEXT);
+    }
+    // Match case: highlighted when on (⌥⌘C).
+    let aa = R { x: field.x + field.w + app.px(6.0), w: app.px(26.0), ..field };
+    if s.case {
+        p.rect(aa, SELECT);
+    }
+    p.text_centered("Aa", aa, 12.0, if s.case { TEXT } else { MUTED });
+    let count = match (s.query.is_empty(), s.matches.len()) {
+        (true, _) => String::new(),
+        (false, 0) => "No results".into(),
+        (false, n) => format!("{}/{n}", ed.match_index().map_or("?".into(), |i| i.to_string())),
+    };
+    p.text(&count, R { x: aa.x + aa.w + app.px(10.0), w: (bar.x + bar.w - aa.x - aa.w - app.px(18.0)).max(0.0), ..field }, 12.0, MUTED, false);
 }
 
 /// Right-click context menu, drawn on top of everything.
@@ -735,9 +782,12 @@ fn status(app: &App, p: &mut Painter) {
     let right = if app.prefix {
         "| split · t tab · 1-9 tab · h/l focus · x close · c clear · j/k worktree · n attention · Tab sidebar · b hide · q quit"
     } else {
-        let editing = app.focus == Focus::Panes && app.focused().and_then(|id| app.panes.get(&id)).is_some_and(|pn| pn.editor.is_some());
+        let fed = app.focused().filter(|_| app.focus == Focus::Panes).and_then(|id| app.panes.get(&id)?.editor.as_ref());
+        let editing = fed.is_some();
+        let finding = fed.and_then(|e| e.search.as_ref()).is_some_and(|s| s.focused);
         match app.focus {
-            Focus::Panes if editing => "⌘S save · ⌘Z undo · ⌘⇧Z redo · ⌘X/C line or selection · ⌘[ ] indent · ⌘W close · ⌘T terminal tab",
+            Focus::Panes if finding => "Enter next · ⇧Enter previous · ⌘G/⌘⇧G next/previous · ⌥⌘C match case · Esc close",
+            Focus::Panes if editing => "⌘F find · ⌘S save · ⌘Z undo · ⌘⇧Z redo · ⌘X/C line or selection · ⌘[ ] indent · ⌘W close · ⌘T terminal tab",
             Focus::Files => "Enter open · ←→ fold · right-click for actions · Esc back · ⌘⇧E hide",
             Focus::Sidebar => "Enter open · right-click for actions · a add project · w worktree · W workspace · D delete worktree · x delete",
             Focus::Panes => "⌘T tab · ⌘⇧[ ] tabs · ⌘D split · ⌘[ ] focus · ⌘K clear · ⌘E sidebar · ⌘⇧E files · ⌘↑↓ worktree · C-a prefix",
