@@ -236,9 +236,8 @@ impl App {
             return self.update_hover(x, y);
         }
         if self.sidebar_rect().contains(x, y) {
-            let len = self.rows().len();
-            self.sel = (self.sel as i32 - n).clamp(0, len.saturating_sub(1) as i32) as usize;
-            return;
+            self.sidebar_scroll(n);
+            return self.update_hover(x, y);
         }
         let Some(pr) = self.pane_body_at(x, y) else { return };
         if self.panes[&pr.id].editor.is_some() {

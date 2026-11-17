@@ -83,6 +83,10 @@ pub struct App {
     pub agents_hover: Option<usize>,
     /// Agents panel scroll: first visible row.
     agents_top: usize,
+    /// Sidebar scroll: first visible row, and the selection it was last scrolled to show (the
+    /// wheel scrolls freely; a selection change scrolls just enough to show it).
+    side_top: std::cell::Cell<usize>,
+    side_sel: std::cell::Cell<usize>,
     /// Share of the sidebar's height the agents panel takes (drag its top edge to resize).
     pub agents_share: f32,
     /// A done agent you're looking at: listed under Done until focus leaves it.
@@ -186,6 +190,8 @@ impl App {
             tab_hover: None,
             agents_hover: None,
             agents_top: 0,
+            side_top: Default::default(),
+            side_sel: Default::default(),
             agents_share: AGENTS_SHARE,
             held: None,
             prefix: false,

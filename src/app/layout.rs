@@ -218,11 +218,27 @@ impl App {
         Tree { area, top, len, scale: self.scale }
     }
 
-    /// The sidebar's tree of `nrows` rows, scrolled just enough to show the selection.
+    /// The sidebar's tree of `nrows` rows. Keeps its wheel scroll; when the selection changes it
+    /// scrolls just enough to show it.
     pub fn sidebar_tree(&self, nrows: usize) -> Tree {
         let t = self.make_tree(self.below_header(self.workspaces_content()), 0, nrows);
+        let cap = t.capacity();
         let sel = self.sel.min(nrows.saturating_sub(1));
-        Tree { top: (sel + 1).saturating_sub(t.capacity()), ..t }
+        let mut top = self.side_top.get();
+        if self.side_sel.replace(sel) != sel {
+            top = top.min(sel).max((sel + 1).saturating_sub(cap));
+        }
+        top = top.min(nrows.saturating_sub(cap));
+        self.side_top.set(top);
+        Tree { top, ..t }
+    }
+
+    /// Wheel over the sidebar: scroll `n` rows (positive = up); a no-op when everything fits.
+    pub(super) fn sidebar_scroll(&mut self, n: i32) {
+        let len = self.rows().len();
+        let t = self.sidebar_tree(len);
+        let max = len.saturating_sub(t.capacity());
+        self.side_top.set((t.top as i32 - n).clamp(0, max as i32) as usize);
     }
 
     /// The explorer's tree (empty when there's none).
