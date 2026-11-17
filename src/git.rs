@@ -74,6 +74,8 @@ pub fn common_dir(dir: &Path) -> Option<PathBuf> {
     fs::canonicalize(common).ok()
 }
 
+/// The checkout's worktrees, main first, then linked ones by branch; `None` if `dir` isn't a
+/// checkout root. Reads `.git` files directly, no subprocess.
 pub fn worktrees(dir: &Path) -> Option<Vec<Worktree>> {
     let common = common_dir(dir)?;
     let mut out = Vec::new();
@@ -133,6 +135,8 @@ fn run(dir: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// Add a worktree for `branch` (created from HEAD if it doesn't exist) under
+/// `~/.pmux/worktrees/<repo>/<branch-slug>`. Returns its path.
 pub fn add(project: &Path, branch: &str) -> Result<PathBuf, String> {
     let repo = common_dir(project)
         .and_then(|c| c.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()))
@@ -148,6 +152,7 @@ pub fn add(project: &Path, branch: &str) -> Result<PathBuf, String> {
     Ok(dest)
 }
 
+/// `git worktree remove` (with `--force`: even with uncommitted changes).
 pub fn remove(project: &Path, wt: &Path, force: bool) -> Result<(), String> {
     let w = wt.to_string_lossy();
     let args: &[&str] = if force { &["worktree", "remove", "--force", &w] } else { &["worktree", "remove", &w] };
@@ -156,7 +161,7 @@ pub fn remove(project: &Path, wt: &Path, force: bool) -> Result<(), String> {
 
 /// Uncommitted or untracked changes in a worktree (what makes `git worktree remove` refuse).
 pub fn dirty(wt: &Path) -> bool {
-    run(wt, &["status", "--porcelain"]).map(|o| !o.trim().is_empty()).unwrap_or(false)
+    run(wt, &["--no-optional-locks", "status", "--porcelain"]).map(|o| !o.trim().is_empty()).unwrap_or(false)
 }
 
 /// Commits HEAD is behind its upstream; 0 without one. Read-only: writes nothing under .git.
@@ -165,12 +170,16 @@ pub fn behind(wt: &Path) -> u32 {
 }
 
 /// `git status` for the repo containing `root`, limited to `root` (blocking: call off the UI thread).
+///
+/// Runs with `--no-optional-locks`: a plain `git status` refreshes the index, which writes
+/// `.git/index.lock` and touches the git dir. We watch that dir (`watch_paths`), and a change
+/// there runs this again, so without the flag pmux loops on `git status` forever.
 pub fn status(root: &Path) -> Status {
     let mut st = Status::default();
     let Ok(top) = run(root, &["rev-parse", "--show-toplevel"]) else { return st };
     let top = PathBuf::from(top.trim());
     let top = fs::canonicalize(&top).unwrap_or(top);
-    let Ok(out) = run(root, &["status", "--porcelain=v1", "-z", "--ignored", "-unormal", "--", "."]) else { return st };
+    let Ok(out) = run(root, &["--no-optional-locks", "status", "--porcelain=v1", "-z", "--ignored", "-unormal", "--", "."]) else { return st };
     let mut recs = out.split('\0').filter(|r| r.len() > 3);
     while let Some(r) = recs.next() {
         let (x, y) = (r.as_bytes()[0], r.as_bytes()[1]);
