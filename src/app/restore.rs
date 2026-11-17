@@ -92,6 +92,12 @@ impl App {
             v.tabs.push(Tab { panes: vec![id], focus: 0 });
         }
         self.hold = Some(link);
+        // Terminals that moved to another worktree while no window was open.
+        for t in &w.terms {
+            if let Some(dir) = &t.cwd {
+                self.follow_cwd(t.id, dir);
+            }
+        }
         self.saved_last.clear();
         self.dirty = true;
         Ok(saved.current.filter(|c| self.views.contains_key(c)))

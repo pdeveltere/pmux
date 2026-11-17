@@ -37,6 +37,8 @@ const KILL: u8 = 4;
 const LAYOUT: u8 = 5;
 /// A terminal's title and explicit state changed (JSON `Meta`).
 const META: u8 = 6;
+/// The window moved a terminal to another view (JSON `Moved`).
+const VIEW: u8 = 7;
 // Holder → window.
 const WELCOME: u8 = 101;
 const SCREEN: u8 = 102;
@@ -46,6 +48,8 @@ const AGENT: u8 = 105;
 const FAILED: u8 = 106;
 /// What the screen says the agent is doing (`detect::Screen`, or empty: nothing known).
 const STATE: u8 = 107;
+/// Where the terminal is working now (a path): its shell `cd`ed, or its agent's hook said so.
+const CWD: u8 = 108;
 
 /// Look at an agent's screen at most this often while it prints.
 const DETECT_EVERY: Duration = Duration::from_millis(100);
@@ -73,6 +77,16 @@ pub struct TermInfo {
     /// What the screen says the agent is doing (see `detect`).
     #[serde(default)]
     pub screen: Option<String>,
+    /// Where it's working, once that moved after it started (see `CWD`).
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
+}
+
+/// A terminal now belongs to another view, with the names `pmux ls` shows for it.
+#[derive(Serialize, Deserialize)]
+pub struct Moved {
+    pub view: PathBuf,
+    pub env: Vec<(String, String)>,
 }
 
 /// What `pmux title` and `pmux status` set. The background pmux keeps it, so it's right whether
@@ -123,6 +137,7 @@ pub enum Msg {
     Exit(u32),
     Agent(u32, Option<String>),
     Screen(u32, Option<crate::detect::Screen>),
+    Cwd(u32, PathBuf),
     Failed(String),
     Lost,
 }
@@ -155,6 +170,9 @@ impl Link {
     }
     pub fn meta(&self, id: u32, m: &Meta) {
         self.send(META, id, &serde_json::to_vec(m).unwrap());
+    }
+    pub fn moved(&self, id: u32, m: &Moved) {
+        self.send(VIEW, id, &serde_json::to_vec(m).unwrap());
     }
 
     /// Attach to the holder, starting it if none runs. Returns the link, the welcome, each
@@ -196,6 +214,7 @@ pub fn pump(mut r: UnixStream, f: impl Fn(Msg) -> bool + Send + 'static) {
                 EXIT => Msg::Exit(id),
                 AGENT => Msg::Agent(id, (!p.is_empty()).then(|| String::from_utf8_lossy(&p).into_owned())),
                 STATE => Msg::Screen(id, crate::detect::Screen::parse(&String::from_utf8_lossy(&p))),
+                CWD => Msg::Cwd(id, PathBuf::from(String::from_utf8_lossy(&p).into_owned())),
                 FAILED => Msg::Failed(String::from_utf8_lossy(&p).into_owned()),
                 _ => continue,
             };
@@ -271,6 +290,8 @@ struct Term {
     last_detect: Instant,
     /// Output arrived since the screen was last looked at.
     detect_due: bool,
+    /// The shell's own folder when last probed: a change is a `cd`.
+    shell_cwd: Option<PathBuf>,
 }
 
 impl Term {
@@ -465,6 +486,19 @@ impl Holder {
                     self.save();
                 }
             }
+            VIEW => {
+                if let (Some(t), Ok(m)) = (self.terms.get_mut(&id), serde_json::from_slice::<Moved>(&p)) {
+                    t.info.view = m.view.clone();
+                    t.spawn.view = m.view;
+                    for (k, v) in m.env {
+                        match t.spawn.env.iter_mut().find(|(n, _)| *n == k) {
+                            Some(e) => e.1 = v,
+                            None => t.spawn.env.push((k, v)),
+                        }
+                    }
+                    self.save();
+                }
+            }
             _ => {}
         }
     }
@@ -497,7 +531,8 @@ impl Holder {
             let _ = child.wait();
             let _ = tx.send(In::Exit(id));
         });
-        let info = TermInfo { id, view: s.view.clone(), rows: s.rows, cols: s.cols, agent: None, meta: Meta::default(), worked: false, screen: None };
+        let info =
+            TermInfo { id, view: s.view.clone(), rows: s.rows, cols: s.cols, agent: None, meta: Meta::default(), worked: false, screen: None, cwd: None };
         let long_ago = Instant::now() - Duration::from_secs(60);
         let vt = Vt::new(s.cols as usize, s.rows as usize);
         let t = Term {
@@ -515,6 +550,7 @@ impl Holder {
             screen: None,
             last_detect: long_ago,
             detect_due: false,
+            shell_cwd: None,
         };
         self.terms.insert(id, t);
         Ok(())
@@ -588,6 +624,26 @@ impl Holder {
             self.send(STATE, id, &[]);
             self.save();
         }
+        // At the shell's prompt: a `cd` moves where the terminal works. Only a change counts, so
+        // an agent exiting (its shell still where it started) doesn't move anything.
+        let Some(t) = self.terms.get_mut(&id) else { return };
+        if t.info.agent.is_none() && t.pgid == t.shell {
+            if let Some(cwd) = pty::proc_cwd(t.shell) {
+                if t.shell_cwd.replace(cwd.clone()).is_some_and(|old| old != cwd) {
+                    self.set_cwd(id, cwd);
+                }
+            }
+        }
+    }
+
+    /// The terminal works in `dir` now: tell the window, which moves its tab to that worktree.
+    fn set_cwd(&mut self, id: u32, dir: PathBuf) {
+        let Some(t) = self.terms.get_mut(&id) else { return };
+        if t.info.cwd.as_ref() == Some(&dir) {
+            return;
+        }
+        t.info.cwd = Some(dir.clone());
+        self.send(CWD, id, dir.as_os_str().as_encoded_bytes());
     }
 
     /// Look at the screens that changed since they were last looked at.
@@ -721,6 +777,15 @@ impl Holder {
                 Some(t) => {
                     t.session = Some(sid.to_string());
                     self.save();
+                    Reply::ok("")
+                }
+                None => Reply::err("not inside a pmux pane"),
+            },
+            // From the agent's hook: it works in another folder now (`cd`, `EnterWorktree`).
+            ["agent-cwd", _agent, dir] => match me {
+                Some(id) => {
+                    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| PathBuf::from(dir));
+                    self.set_cwd(id, dir);
                     Reply::ok("")
                 }
                 None => Reply::err("not inside a pmux pane"),

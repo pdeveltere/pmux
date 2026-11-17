@@ -9,6 +9,7 @@ mod commands;
 mod edit;
 mod explorer;
 mod find;
+mod follow;
 mod keys;
 mod layout;
 mod menu;
@@ -228,6 +229,7 @@ impl App {
                         p.set_screen(st);
                     }
                 }
+                crate::hold::Msg::Cwd(id, dir) => self.follow_cwd(id, &dir),
                 crate::hold::Msg::Failed(e) => self.say(format!("spawn failed: {e}")),
                 crate::hold::Msg::Lost => self.on_hold_lost(),
             },
