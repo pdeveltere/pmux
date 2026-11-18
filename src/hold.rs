@@ -684,7 +684,8 @@ impl Term {
     fn kind(&self) -> &str {
         self.info.agent.as_deref().unwrap_or("shell")
     }
-    /// Same rules as the window: explicit state, else the screen, else working/done/idle from output.
+    /// Same rules as the window: explicit state, else the screen; output only counts until the
+    /// screen has given a verdict.
     fn state(&self) -> &str {
         use crate::detect::Screen;
         if let Some(s) = &self.info.meta.state {
@@ -697,7 +698,7 @@ impl Term {
         }
         if self.info.agent.is_none() {
             "-"
-        } else if self.last_output.elapsed() < WORKING_QUIET {
+        } else if self.screen.is_none() && self.last_output.elapsed() < WORKING_QUIET {
             "working"
         } else if self.info.worked {
             "done"

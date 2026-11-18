@@ -77,9 +77,9 @@ pub struct Pane {
 }
 
 impl Pane {
-    /// Effective state: the one set explicitly, else a bell, else what the agent's screen shows,
-    /// else working/idle from output. Output counts as working even when the screen looks idle
-    /// (the screen rules can miss a new layout; output can't).
+    /// Effective state: the one set explicitly, else a bell, else what the agent's screen shows.
+    /// Output only counts until the screen has given a verdict: an idle agent writes too (it
+    /// redraws when resized).
     pub fn state(&self) -> Option<State> {
         use crate::detect::Screen;
         if self.state.is_some() {
@@ -89,7 +89,11 @@ impl Pane {
             return Some(State::Waiting);
         }
         self.agent?;
-        Some(if self.screen == Some(Screen::Working) || self.last_output.elapsed() < WORKING_QUIET {
+        let working = match self.screen {
+            Some(s) => s == Screen::Working,
+            None => self.last_output.elapsed() < WORKING_QUIET,
+        };
+        Some(if working {
             State::Working
         } else if self.unseen {
             State::Done
@@ -102,7 +106,7 @@ impl Pane {
     pub fn since(&self) -> Instant {
         if self.state.is_some() {
             self.state_at
-        } else if self.screen.is_some() && self.screen_at > self.last_output - WORKING_QUIET {
+        } else if self.screen.is_some() {
             self.screen_at
         } else if self.bell || self.last_output.elapsed() >= WORKING_QUIET {
             self.last_output + WORKING_QUIET
@@ -114,7 +118,7 @@ impl Pane {
     /// When the working → idle heuristic flips next, if it will.
     pub fn state_change_at(&self) -> Option<Instant> {
         let at = self.last_output + WORKING_QUIET;
-        (self.agent.is_some() && self.state.is_none() && at > Instant::now()).then_some(at)
+        (self.agent.is_some() && self.state.is_none() && self.screen.is_none() && at > Instant::now()).then_some(at)
     }
 
     pub fn label(&self) -> String {
@@ -413,7 +417,27 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::State;
+    use super::{Pane, State, Vt};
+    use crate::detect::Screen;
+    use std::path::Path;
+    use std::time::Instant;
+
+    #[test]
+    fn output_counts_as_working_only_without_a_screen_verdict() {
+        let mut p = Pane::new(1, Path::new("/"), Vt::new(2, 1), None, None, (2, 1));
+        p.agent = Some("claude");
+        p.last_output = Instant::now();
+        assert_eq!(p.state(), Some(State::Working));
+        assert!(p.state_change_at().is_some());
+
+        // An idle agent redrawing after a resize stays idle.
+        p.set_screen(Some(Screen::Idle));
+        assert_eq!(p.state(), Some(State::Idle));
+        assert_eq!(p.state_change_at(), None);
+
+        p.set_screen(Some(Screen::Working));
+        assert_eq!(p.state(), Some(State::Working));
+    }
 
     #[test]
     fn state_names_and_urgency() {
