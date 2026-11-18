@@ -6,6 +6,8 @@ use super::{Action, App, TabHit};
 pub const SIDEBAR_W: f32 = 250.0;
 /// Tree row: Zed's project panel entry, a 24px (`h_6`) label box inside a 1px border.
 pub const ROW_H: f32 = 26.0;
+/// Workspaces tree rows: roomier than the other panels, so projects are easy to tell apart.
+const SIDEBAR_ROW_H: f32 = 32.0;
 /// Tree indent per level (Zed's project panel `indent_size`).
 pub const INDENT: f32 = 20.0;
 /// UI icon size, in points.
@@ -66,6 +68,8 @@ pub struct Tree {
     pub top: usize,
     /// Number of rows.
     pub len: usize,
+    /// Row height, in logical pixels.
+    pub(super) row_pt: f32,
     pub(super) scale: f32,
 }
 
@@ -88,7 +92,7 @@ impl Tree {
     }
 
     pub fn row_h(&self) -> f32 {
-        self.px(ROW_H)
+        self.px(self.row_pt)
     }
 
     /// Rows that fit.
@@ -217,13 +221,13 @@ impl App {
     }
 
     pub(super) fn make_tree(&self, area: R, top: usize, len: usize) -> Tree {
-        Tree { area, top, len, scale: self.scale }
+        Tree { area, top, len, row_pt: ROW_H, scale: self.scale }
     }
 
     /// The sidebar's tree of `nrows` rows. Keeps its wheel scroll; when the selection changes it
     /// scrolls just enough to show it.
     pub fn sidebar_tree(&self, nrows: usize) -> Tree {
-        let t = self.make_tree(self.below_header(self.workspaces_content()), 0, nrows);
+        let t = Tree { row_pt: SIDEBAR_ROW_H, ..self.make_tree(self.below_header(self.workspaces_content()), 0, nrows) };
         let cap = t.capacity();
         let sel = self.sel.min(nrows.saturating_sub(1));
         let mut top = self.side_top.get();
