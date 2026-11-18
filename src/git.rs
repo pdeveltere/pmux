@@ -159,11 +159,6 @@ pub fn remove(project: &Path, wt: &Path, force: bool) -> Result<(), String> {
     run(project, args).map(|_| ())
 }
 
-/// Uncommitted or untracked changes in a worktree (what makes `git worktree remove` refuse).
-pub fn dirty(wt: &Path) -> bool {
-    run(wt, &["--no-optional-locks", "status", "--porcelain"]).map(|o| !o.trim().is_empty()).unwrap_or(false)
-}
-
 /// Commits HEAD is behind its upstream; 0 without one. Read-only: writes nothing under .git.
 pub fn behind(wt: &Path) -> u32 {
     run(wt, &["--no-optional-locks", "rev-list", "--count", "HEAD..@{u}"]).ok().and_then(|o| o.trim().parse().ok()).unwrap_or(0)

@@ -139,13 +139,6 @@ impl App {
     fn prompt_key(&mut self, k: &KeyEvent) {
         let Some(mut p) = self.prompt.take() else { return };
         let yes = input::named(k) == Some(NamedKey::Enter) || matches!(&k.logical_key, Key::Character(s) if s.as_str() == "y");
-        if matches!(p.kind, PromptKind::CheckingWorktree(..)) {
-            // Can't confirm yet: we don't know what would be lost. Anything else cancels.
-            if yes {
-                self.prompt = Some(p);
-            }
-            return;
-        }
         if let PromptKind::Confirm(c) = p.kind {
             if yes {
                 self.close(c);
@@ -183,7 +176,6 @@ impl App {
             PromptKind::RenameWorkspace(w) => self.rename_workspace(w, input).map(|()| String::new()),
             PromptKind::NewWorktree(proj) => return self.add_worktree(&proj, input),
             PromptKind::Confirm(c) => return self.close(c),
-            PromptKind::CheckingWorktree(..) => return,
         };
         match r {
             Ok(m) if m.is_empty() => {}

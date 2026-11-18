@@ -54,8 +54,6 @@ pub enum Ev {
     Fs,
     /// `git status` for an explorer root finished.
     FileStatus(PathBuf, git::Status),
-    /// The dirty check for deleting this worktree finished.
-    WorktreeChecked(PathBuf, bool),
     /// `git worktree remove` finished: (worktree, display name, result, API caller waiting for it).
     WorktreeRemoved(PathBuf, String, Result<(), String>, Option<Sender<Reply>>),
     /// A background highlight of editor pane `.0` at text version `.1` finished.
@@ -304,7 +302,6 @@ impl App {
                     self.refresh_status();
                 }
             }
-            Ev::WorktreeChecked(wt, dirty) => self.worktree_checked(&wt, dirty),
             Ev::WorktreeRemoved(wt, name, r, reply) => self.worktree_removed(wt, name, r, reply),
             Ev::Highlighted(id, version, hl) => {
                 if let Some(ed) = self.panes.get_mut(&id).and_then(|p| p.editor.as_mut()) {

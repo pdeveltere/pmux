@@ -322,44 +322,17 @@ impl App {
         (name, paths, n)
     }
 
-    /// Close right away if nothing runs inside, otherwise ask first.
+    /// Close right away if nothing runs inside, otherwise ask first. Worktrees never ask: they go
+    /// at once, uncommitted changes and open panes included.
     pub(super) fn request_close(&mut self, c: Close) {
         let (name, _, n) = self.close_info(&c);
         let (c, label) = match c {
-            // Deletes files on disk: always ask, once we know what would be lost.
-            Close::Worktree(proj, wt, _) => return self.check_worktree(proj, wt, &name),
+            Close::Worktree(_, wt, _) if self.removing.contains(&wt) => return self.say(format!("already deleting {name}")),
+            Close::Worktree(proj, wt, _) => return self.close(Close::Worktree(proj, wt, true)),
             c if n == 0 => return self.close(c),
             c @ Close::Project(..) => (c, format!("Close {name} and its {}? Files stay on disk. y/n", util::plural(n, "pane"))),
             c => (c, format!("Delete {name} and close its {}? Files stay on disk. y/n", util::plural(n, "pane"))),
         };
-        self.prompt = Some(Prompt::new(PromptKind::Confirm(c), label, ""));
-    }
-
-    /// Off the UI thread: `git status` can take seconds in a big checkout.
-    fn check_worktree(&mut self, proj: PathBuf, wt: PathBuf, name: &str) {
-        if self.removing.contains(&wt) {
-            return self.say(format!("already deleting {name}"));
-        }
-        let label = format!("Delete {name}? Checking for uncommitted changes...");
-        self.prompt = Some(Prompt::new(PromptKind::CheckingWorktree(proj, wt.clone()), label, ""));
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            let dirty = git::dirty(&wt);
-            let _ = tx.send_event(Ev::WorktreeChecked(wt, dirty));
-        });
-    }
-
-    /// Turn the waiting prompt into the real question (unless it was cancelled meanwhile).
-    pub(super) fn worktree_checked(&mut self, wt: &Path, dirty: bool) {
-        let proj = match self.prompt.as_ref().map(|p| &p.kind) {
-            Some(PromptKind::CheckingWorktree(proj, w)) if w == wt => proj.clone(),
-            _ => return,
-        };
-        let c = Close::Worktree(proj, wt.to_path_buf(), dirty);
-        let (name, _, n) = self.close_info(&c);
-        let panes = if n > 0 { format!(" and close its {}", util::plural(n, "pane")) } else { String::new() };
-        let lost = if dirty { " It has uncommitted changes, which will be lost." } else { "" };
-        let label = format!("Delete {name}{panes}? Removes its folder.{lost} y/n");
         self.prompt = Some(Prompt::new(PromptKind::Confirm(c), label, ""));
     }
 
