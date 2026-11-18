@@ -143,8 +143,7 @@ impl App {
                 (Some('w'), _) => self.say("not a git project"),
                 (Some('x'), Row::Ws(w)) => self.request_close(Close::Workspace(w)),
                 (Some('x'), Row::Proj(w, p)) => self.request_close(Close::Project(w, p)),
-                (Some('x'), Row::Wt(..)) => self.say("x closes a project or workspace; D removes a worktree"),
-                (Some('D'), Row::Wt(w, p, t)) => self.delete_worktree(w, p, t),
+                (Some('x'), Row::Wt(..)) => self.say("x closes a project or workspace; right-click deletes a worktree"),
                 (Some('q'), _) => self.quit = true,
                 _ => {}
             }
@@ -334,15 +333,6 @@ impl App {
             c => (c, format!("Delete {name} and close its {}? Files stay on disk. y/n", util::plural(n, "pane"))),
         };
         self.prompt = Some(Prompt::new(PromptKind::Confirm(c), label, ""));
-    }
-
-    fn delete_worktree(&mut self, w: usize, p: usize, t: usize) {
-        let pr = self.project(w, p);
-        let wt = &pr.worktrees.as_ref().expect("row has worktrees")[t];
-        if wt.main {
-            return self.say("can't delete the main checkout");
-        }
-        self.request_close(Close::Worktree(pr.path.clone(), wt.path.clone(), false));
     }
 
     pub(super) fn close(&mut self, c: Close) {

@@ -981,7 +981,7 @@ fn status(app: &App, p: &mut Painter) {
             Focus::Panes if finding => "Enter next · ⇧Enter previous · ⌘G/⌘⇧G next/previous · ⌥⌘C match case · Esc close",
             Focus::Panes if editing => "⌘F find · ⌘S save · ⌘Z undo · ⌘⇧Z redo · ⌘X/C line or selection · ⌘[ ] indent · ⌘W close · ⌘T terminal tab",
             Focus::Files => "Enter open · ←→ fold · right-click for actions · Esc back · ⌘⇧E hide",
-            Focus::Sidebar => "Enter open · right-click for actions · a add project · w worktree · W workspace · D delete worktree · x delete",
+            Focus::Sidebar => "Enter open · right-click for actions · a add project · w worktree · W workspace · x delete",
             Focus::Panes => "⌘P go to file · ⌘T tab · ⌘⇧[ ] tabs · ⌘D split · ⌘[ ] focus · ⌘K clear · ⌘E sidebar · ⌘⇧E files · ⌘↑↓ worktree · C-a prefix",
         }
     };
