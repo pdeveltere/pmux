@@ -209,7 +209,7 @@ impl App {
         if (n > 0 || git::dirty(&wt)) && !force {
             return Reply::err(format!("worktree has {n} open pane(s) or uncommitted changes; add --force"));
         }
-        self.close(Close::Worktree(proj, wt.clone(), force));
+        self.remove_worktree_now(&proj, &wt, force);
         if wt.exists() {
             Reply::err(self.flash.as_ref().map(|f| f.0.clone()).unwrap_or_default())
         } else {

@@ -182,6 +182,9 @@ pub enum PromptKind {
     NewWorktree(PathBuf),
     /// Yes/no before closing something that still has panes.
     Confirm(Close),
+    /// (project path, worktree path): waiting for the dirty check before asking to delete.
+    /// Becomes `Confirm` when it finishes; "yes" keys do nothing until then.
+    CheckingWorktree(PathBuf, PathBuf),
     RenameWorkspace(usize),
 }
 

@@ -1,5 +1,5 @@
 //! Sidebar: the workspace → project → worktree tree, its keys, reordering, adding and closing.
-use super::{proj_key, subtree_end, ws_key, App, Close, Drop, Focus, Project, Prompt, PromptKind, Row, Workspace};
+use super::{proj_key, subtree_end, ws_key, App, Close, Drop, Ev, Focus, Project, Prompt, PromptKind, Row, Workspace};
 use crate::{config, git, input, util};
 use std::path::{Path, PathBuf};
 use winit::event::KeyEvent;
@@ -324,17 +324,40 @@ impl App {
     pub(super) fn request_close(&mut self, c: Close) {
         let (name, _, n) = self.close_info(&c);
         let (c, label) = match c {
-            Close::Worktree(proj, wt, _) => {
-                // Deletes files on disk: always ask. Say what else goes with it.
-                let dirty = git::dirty(&wt);
-                let panes = if n > 0 { format!(" and close its {}", util::plural(n, "pane")) } else { String::new() };
-                let lost = if dirty { " It has uncommitted changes, which will be lost." } else { "" };
-                (Close::Worktree(proj, wt, dirty), format!("Delete {name}{panes}? Removes its folder.{lost} y/n"))
-            }
+            // Deletes files on disk: always ask, once we know what would be lost.
+            Close::Worktree(proj, wt, _) => return self.check_worktree(proj, wt, &name),
             c if n == 0 => return self.close(c),
             c @ Close::Project(..) => (c, format!("Close {name} and its {}? Files stay on disk. y/n", util::plural(n, "pane"))),
             c => (c, format!("Delete {name} and close its {}? Files stay on disk. y/n", util::plural(n, "pane"))),
         };
+        self.prompt = Some(Prompt::new(PromptKind::Confirm(c), label, ""));
+    }
+
+    /// Off the UI thread: `git status` can take seconds in a big checkout.
+    fn check_worktree(&mut self, proj: PathBuf, wt: PathBuf, name: &str) {
+        if self.removing.contains(&wt) {
+            return self.say(format!("already deleting {name}"));
+        }
+        let label = format!("Delete {name}? Checking for uncommitted changes...");
+        self.prompt = Some(Prompt::new(PromptKind::CheckingWorktree(proj, wt.clone()), label, ""));
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let dirty = git::dirty(&wt);
+            let _ = tx.send_event(Ev::WorktreeChecked(wt, dirty));
+        });
+    }
+
+    /// Turn the waiting prompt into the real question (unless it was cancelled meanwhile).
+    pub(super) fn worktree_checked(&mut self, wt: &Path, dirty: bool) {
+        let proj = match self.prompt.as_ref().map(|p| &p.kind) {
+            Some(PromptKind::CheckingWorktree(proj, w)) if w == wt => proj.clone(),
+            _ => return,
+        };
+        let c = Close::Worktree(proj, wt.to_path_buf(), dirty);
+        let (name, _, n) = self.close_info(&c);
+        let panes = if n > 0 { format!(" and close its {}", util::plural(n, "pane")) } else { String::new() };
+        let lost = if dirty { " It has uncommitted changes, which will be lost." } else { "" };
+        let label = format!("Delete {name}{panes}? Removes its folder.{lost} y/n");
         self.prompt = Some(Prompt::new(PromptKind::Confirm(c), label, ""));
     }
 
@@ -349,23 +372,17 @@ impl App {
 
     pub(super) fn close(&mut self, c: Close) {
         let (name, paths, _) = self.close_info(&c);
-        let ids: Vec<u32> = paths.iter().flat_map(|v| self.panes_in(v)).collect();
-        self.kill_panes(ids);
-        if self.current.as_ref().is_some_and(|cur| paths.contains(cur)) {
-            self.current = None;
-            self.focus = Focus::Sidebar;
-            for v in &paths {
-                self.files.remove(v);
-            }
-            self.files_rewatch();
-        }
+        self.leave_views(&paths);
         match c {
+            // Off the UI thread: removing a big checkout takes a while. The row stays until done.
             Close::Worktree(proj, wt, force) => {
-                self.say(match git::remove(&proj, &wt, force) {
-                    Ok(()) => format!("deleted {name}"),
-                    Err(e) => format!("couldn't delete {name}: {e}"),
+                self.say(format!("deleting {name}..."));
+                self.removing.insert(wt.clone());
+                let tx = self.tx.clone();
+                std::thread::spawn(move || {
+                    let r = git::remove(&proj, &wt, force);
+                    let _ = tx.send_event(Ev::WorktreeRemoved(wt, name, r));
                 });
-                self.reload_git();
             }
             Close::Workspace(w) => {
                 let ws = self.workspaces.remove(w);
@@ -378,6 +395,38 @@ impl App {
                 self.closed_tree(format!("closed {name}"));
             }
         }
+        self.sel = self.sel.min(self.rows().len().saturating_sub(1));
+        self.dirty = true;
+    }
+
+    /// Kill the panes in `paths`, and step out if one of them is the current view.
+    fn leave_views(&mut self, paths: &[PathBuf]) {
+        let ids: Vec<u32> = paths.iter().flat_map(|v| self.panes_in(v)).collect();
+        self.kill_panes(ids);
+        if self.current.as_ref().is_some_and(|cur| paths.contains(cur)) {
+            self.current = None;
+            self.focus = Focus::Sidebar;
+            for v in paths {
+                self.files.remove(v);
+            }
+            self.files_rewatch();
+        }
+    }
+
+    /// Delete a worktree and wait for it, for the API, whose reply carries the result.
+    pub(super) fn remove_worktree_now(&mut self, proj: &Path, wt: &Path, force: bool) {
+        let (name, paths, _) = self.close_info(&Close::Worktree(proj.to_path_buf(), wt.to_path_buf(), force));
+        self.leave_views(&paths);
+        let r = git::remove(proj, wt, force);
+        self.worktree_removed(&name, r);
+    }
+
+    pub(super) fn worktree_removed(&mut self, name: &str, r: Result<(), String>) {
+        self.say(match r {
+            Ok(()) => format!("deleted {name}"),
+            Err(e) => format!("couldn't delete {name}: {e}"),
+        });
+        self.reload_git();
         self.sel = self.sel.min(self.rows().len().saturating_sub(1));
         self.dirty = true;
     }

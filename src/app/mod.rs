@@ -54,6 +54,10 @@ pub enum Ev {
     Fs,
     /// `git status` for an explorer root finished.
     FileStatus(PathBuf, git::Status),
+    /// The dirty check for deleting this worktree finished.
+    WorktreeChecked(PathBuf, bool),
+    /// `git worktree remove` finished: (worktree, display name, result).
+    WorktreeRemoved(PathBuf, String, Result<(), String>),
     /// A background highlight of editor pane `.0` at text version `.1` finished.
     Highlighted(u32, u64, Vec<Vec<crate::syntax::Span>>),
 }
@@ -150,6 +154,8 @@ pub struct App {
     /// One `git status` at a time; `status_again` re-runs it when changes arrived meanwhile.
     status_busy: bool,
     status_again: bool,
+    /// Worktrees being deleted in the background.
+    removing: HashSet<PathBuf>,
     /// Why the config file couldn't be loaded; while set, `save` leaves the file alone.
     config_error: Option<String>,
 }
@@ -238,6 +244,7 @@ impl App {
             link_hover: None,
             status_busy: false,
             status_again: false,
+            removing: HashSet::new(),
         };
         app.rewatch();
         app
@@ -294,6 +301,11 @@ impl App {
                 if std::mem::take(&mut self.status_again) {
                     self.refresh_status();
                 }
+            }
+            Ev::WorktreeChecked(wt, dirty) => self.worktree_checked(&wt, dirty),
+            Ev::WorktreeRemoved(wt, name, r) => {
+                self.removing.remove(&wt);
+                self.worktree_removed(&name, r);
             }
             Ev::Highlighted(id, version, hl) => {
                 if let Some(ed) = self.panes.get_mut(&id).and_then(|p| p.editor.as_mut()) {
