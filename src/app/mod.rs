@@ -56,8 +56,8 @@ pub enum Ev {
     FileStatus(PathBuf, git::Status),
     /// The dirty check for deleting this worktree finished.
     WorktreeChecked(PathBuf, bool),
-    /// `git worktree remove` finished: (worktree, display name, result).
-    WorktreeRemoved(PathBuf, String, Result<(), String>),
+    /// `git worktree remove` finished: (worktree, display name, result, API caller waiting for it).
+    WorktreeRemoved(PathBuf, String, Result<(), String>, Option<Sender<Reply>>),
     /// A background highlight of editor pane `.0` at text version `.1` finished.
     Highlighted(u32, u64, Vec<Vec<crate::syntax::Span>>),
 }
@@ -276,6 +276,8 @@ impl App {
                 let path = req.args.get(1).cloned().unwrap_or_else(|| "pmux-snapshot.bmp".into());
                 self.snapshot = Some((path, rtx));
             }
+            // Answered when git finishes, so it doesn't hold up the UI thread.
+            Ev::Api(req, rtx) if req.args.len() > 2 && req.args[0] == "worktree" && req.args[1] == "rm" => self.api_worktree_rm(&req.args, rtx),
             Ev::Api(req, rtx) => {
                 let r = self.on_api(req);
                 let _ = rtx.send(r);
@@ -303,10 +305,7 @@ impl App {
                 }
             }
             Ev::WorktreeChecked(wt, dirty) => self.worktree_checked(&wt, dirty),
-            Ev::WorktreeRemoved(wt, name, r) => {
-                self.removing.remove(&wt);
-                self.worktree_removed(&name, r);
-            }
+            Ev::WorktreeRemoved(wt, name, r, reply) => self.worktree_removed(wt, name, r, reply),
             Ev::Highlighted(id, version, hl) => {
                 if let Some(ed) = self.panes.get_mut(&id).and_then(|p| p.editor.as_mut()) {
                     ed.set_highlight(version, hl);

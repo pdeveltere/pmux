@@ -1,8 +1,9 @@
 //! The socket API: `pmux <command>` from inside or outside a pane.
 use super::{App, Close, Pane, State};
 use crate::api::{Reply, Request};
-use crate::{config, git};
+use crate::config;
 use std::path::PathBuf;
+use std::sync::mpsc::Sender;
 
 /// `pmux status` values: the states, plus `clear` to go back to the heuristic.
 const STATUS_ARGS: &str = "working|waiting|idle|done|error|clear";
@@ -131,7 +132,6 @@ impl App {
                     None => Reply::err(format!("no project {t}")),
                 }
             }
-            ["worktree", "rm", t, ..] => self.api_worktree_rm(t, force),
             _ => Reply::err(format!("unknown command: {} (see pmux --help)", a.join(" "))),
         }
     }
@@ -201,19 +201,29 @@ impl App {
         }
     }
 
-    fn api_worktree_rm(&mut self, t: &str, force: bool) -> Reply {
+    /// `worktree rm <dir> [--force]`: replies on `rtx` once git is done. Without `--force`, git
+    /// itself refuses a worktree with uncommitted changes.
+    pub(super) fn api_worktree_rm(&mut self, args: &[String], rtx: Sender<Reply>) {
+        let t = &args[2];
+        let force = args.iter().any(|a| a == "--force");
+        let refuse = |m: String| {
+            let _ = rtx.send(Reply::err(m));
+        };
         let path = std::fs::canonicalize(config::expand(t)).ok();
         let hit = self.projects().find_map(|p| p.worktrees.iter().flatten().find(|w| !w.main && Some(&w.path) == path.as_ref()).map(|w| (p.path.clone(), w.path.clone())));
-        let Some((proj, wt)) = hit else { return Reply::err(format!("no linked worktree at {t}")) };
+        let Some((proj, wt)) = hit else { return refuse(format!("no linked worktree at {t}")) };
         let n = self.panes_in(&wt).len();
-        if (n > 0 || git::dirty(&wt)) && !force {
-            return Reply::err(format!("worktree has {n} open pane(s) or uncommitted changes; add --force"));
+        if n > 0 && !force {
+            return refuse(format!("worktree has {n} open pane(s); add --force"));
         }
-        self.remove_worktree_now(&proj, &wt, force);
-        if wt.exists() {
-            Reply::err(self.flash.as_ref().map(|f| f.0.clone()).unwrap_or_default())
-        } else {
-            Reply::ok(format!("deleted {}", config::tilde(&wt)))
+        let c = Close::Worktree(proj.clone(), wt.clone(), force);
+        let (name, paths, _) = self.close_info(&c);
+        if self.removing.contains(&wt) {
+            return refuse(format!("already deleting {name}"));
         }
+        if force {
+            self.leave_views(&paths);
+        }
+        self.start_removal(proj, wt, force, name, Some(rtx));
     }
 }

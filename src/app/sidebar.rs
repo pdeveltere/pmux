@@ -1,7 +1,9 @@
 //! Sidebar: the workspace → project → worktree tree, its keys, reordering, adding and closing.
 use super::{proj_key, subtree_end, ws_key, App, Close, Drop, Ev, Focus, Project, Prompt, PromptKind, Row, Workspace};
+use crate::api::Reply;
 use crate::{config, git, input, util};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Sender;
 use winit::event::KeyEvent;
 use winit::keyboard::NamedKey;
 
@@ -376,13 +378,7 @@ impl App {
         match c {
             // Off the UI thread: removing a big checkout takes a while. The row stays until done.
             Close::Worktree(proj, wt, force) => {
-                self.say(format!("deleting {name}..."));
-                self.removing.insert(wt.clone());
-                let tx = self.tx.clone();
-                std::thread::spawn(move || {
-                    let r = git::remove(&proj, &wt, force);
-                    let _ = tx.send_event(Ev::WorktreeRemoved(wt, name, r));
-                });
+                self.start_removal(proj, wt, force, name, None);
             }
             Close::Workspace(w) => {
                 let ws = self.workspaces.remove(w);
@@ -400,9 +396,13 @@ impl App {
     }
 
     /// Kill the panes in `paths`, and step out if one of them is the current view.
-    fn leave_views(&mut self, paths: &[PathBuf]) {
+    pub(super) fn leave_views(&mut self, paths: &[PathBuf]) {
         let ids: Vec<u32> = paths.iter().flat_map(|v| self.panes_in(v)).collect();
         self.kill_panes(ids);
+        self.step_out(paths);
+    }
+
+    fn step_out(&mut self, paths: &[PathBuf]) {
         if self.current.as_ref().is_some_and(|cur| paths.contains(cur)) {
             self.current = None;
             self.focus = Focus::Sidebar;
@@ -413,19 +413,34 @@ impl App {
         }
     }
 
-    /// Delete a worktree and wait for it, for the API, whose reply carries the result.
-    pub(super) fn remove_worktree_now(&mut self, proj: &Path, wt: &Path, force: bool) {
-        let (name, paths, _) = self.close_info(&Close::Worktree(proj.to_path_buf(), wt.to_path_buf(), force));
-        self.leave_views(&paths);
-        let r = git::remove(proj, wt, force);
-        self.worktree_removed(&name, r);
+    /// Run `git worktree remove` off the UI thread; `Ev::WorktreeRemoved` reports back.
+    pub(super) fn start_removal(&mut self, proj: PathBuf, wt: PathBuf, force: bool, name: String, reply: Option<Sender<Reply>>) {
+        self.say(format!("deleting {name}..."));
+        self.removing.insert(wt.clone());
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let r = git::remove(&proj, &wt, force);
+            let _ = tx.send_event(Ev::WorktreeRemoved(wt, name, r, reply));
+        });
     }
 
-    pub(super) fn worktree_removed(&mut self, name: &str, r: Result<(), String>) {
-        self.say(match r {
-            Ok(()) => format!("deleted {name}"),
-            Err(e) => format!("couldn't delete {name}: {e}"),
-        });
+    pub(super) fn worktree_removed(&mut self, wt: PathBuf, name: String, r: Result<(), String>, reply: Option<Sender<Reply>>) {
+        self.removing.remove(&wt);
+        let answer = match r {
+            Ok(()) => {
+                self.step_out(std::slice::from_ref(&wt));
+                self.say(format!("deleted {name}"));
+                Reply::ok(format!("deleted {}", config::tilde(&wt)))
+            }
+            Err(e) => {
+                let m = format!("couldn't delete {name}: {e}");
+                self.say(m.clone());
+                Reply::err(m)
+            }
+        };
+        if let Some(tx) = reply {
+            let _ = tx.send(answer);
+        }
         self.reload_git();
         self.sel = self.sel.min(self.rows().len().saturating_sub(1));
         self.dirty = true;
