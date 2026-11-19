@@ -48,6 +48,8 @@ pub enum AgentRow {
     /// Section header: group, how many agents it has.
     Header(Group, usize),
     Agent(u32),
+    /// Blank row between two sections.
+    Gap,
 }
 
 impl App {
@@ -58,7 +60,8 @@ impl App {
         Some(if held { Group::Done } else { Group::of(s) })
     }
 
-    /// Panel rows: each non-empty group's header, then its agents (most recently changed first) unless folded.
+    /// Panel rows: each non-empty group's header, then its agents (most recently changed first) unless
+    /// folded, with a blank row between groups.
     pub fn agent_rows(&self) -> Vec<AgentRow> {
         let mut by: Vec<(Group, Instant, u32)> =
             self.panes.values().filter_map(|p| Some((self.agent_group(p.id)?, p.since(), p.id))).collect();
@@ -68,6 +71,9 @@ impl App {
             let ids: Vec<u32> = by.iter().filter(|e| e.0 == g).map(|e| e.2).collect();
             if ids.is_empty() {
                 continue;
+            }
+            if !rows.is_empty() {
+                rows.push(AgentRow::Gap);
             }
             rows.push(AgentRow::Header(g, ids.len()));
             if !self.folded.contains(&g.fold_key()) {
@@ -137,8 +143,10 @@ impl App {
         Tree { top, ..t }
     }
 
+    /// The clickable row at screen y (gaps aren't).
     pub(super) fn agent_row_at(&self, y: f32) -> Option<usize> {
-        self.agents_tree(self.agent_rows().len()).index_at(y)
+        let rows = self.agent_rows();
+        self.agents_tree(rows.len()).index_at(y).filter(|&i| rows[i] != AgentRow::Gap)
     }
 
     // ---- mouse ----
@@ -149,7 +157,7 @@ impl App {
         match self.agent_row_at(y).map(|i| rows[i]) {
             Some(AgentRow::Header(g, _)) => self.toggle_fold(g.fold_key()),
             Some(AgentRow::Agent(id)) => self.show_pane(id),
-            None => {}
+            Some(AgentRow::Gap) | None => {}
         }
     }
 

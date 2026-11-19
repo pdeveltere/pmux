@@ -436,6 +436,7 @@ fn agents(app: &App, p: &mut Painter) {
         let r = t.bg;
         let left = r.x + app.px(12.0);
         match rows[i] {
+            AgentRow::Gap => {}
             AgentRow::Header(g, n) => {
                 let hover = app.agents_hover == Some(i);
                 let w = p.text(g.label(), R { x: left, w: t.right - left, ..r }, 11.5, group_color(g), true);
