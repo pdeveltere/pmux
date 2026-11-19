@@ -32,6 +32,11 @@ shadow.set()
 NSGradient(starting: rgb(1.0, 0.62, 0.30), ending: rgb(0.93, 0.30, 0.38))!.draw(in: rr(100, 100, 824, 824, 185), angle: -90)
 NSGraphicsContext.restoreGraphicsState()
 
+// Windows and prompt shifted so the stack's bounding box (x 220-820, y 380-820) sits centred on the body.
+let centre = NSAffineTransform()
+centre.translateX(by: -8 * s, yBy: -88 * s)
+centre.concat()
+
 // Three windows, back to front, each more opaque.
 for i in 0..<3 {
     let o = CGFloat(i) * 70
