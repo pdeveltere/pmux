@@ -65,10 +65,13 @@ impl App {
     /// What's under the mouse: hovered rows/buttons and the cursor shape.
     fn update_hover(&mut self, x: f32, y: f32) {
         let (mut hover, mut tab, mut file, mut agent) = (None, None, None, None);
+        let button = self.panel_button_at(x, y);
         let mut icon = CursorIcon::Default;
         let mut link = None;
         if self.prompt.is_none() {
-            if self.edge_at(x).is_some() {
+            if button.is_some() {
+                icon = CursorIcon::Pointer;
+            } else if self.edge_at(x).is_some() {
                 icon = CursorIcon::ColResize;
             } else if self.agents_edge_at(x, y) {
                 icon = CursorIcon::RowResize;
@@ -91,8 +94,8 @@ impl App {
             self.link_hover = link.map(|i| (i, std::time::Instant::now()));
             self.dirty = true;
         }
-        if (hover, tab, file, agent) != (self.hover, self.tab_hover, self.files_hover, self.agents_hover) {
-            (self.hover, self.tab_hover, self.files_hover, self.agents_hover) = (hover, tab, file, agent);
+        if (hover, tab, file, agent, button) != (self.hover, self.tab_hover, self.files_hover, self.agents_hover, self.status_hover) {
+            (self.hover, self.tab_hover, self.files_hover, self.agents_hover, self.status_hover) = (hover, tab, file, agent, button);
             self.dirty = true;
         }
         self.set_cursor(icon);
@@ -117,6 +120,13 @@ impl App {
             return self.finder_click(b, x, y);
         }
         let free = self.prompt.is_none();
+        if let Some(panel) = self.panel_button_at(x, y) {
+            if b == MouseButton::Left {
+                self.toggle_panel(panel);
+                self.update_hover(x, y);
+            }
+            return;
+        }
         let edge = self.edge_at(x);
         if free && edge.is_none() && self.agents_edge_at(x, y) {
             self.resizing = (b == MouseButton::Left).then_some(Edge::Agents);

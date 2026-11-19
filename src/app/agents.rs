@@ -101,6 +101,9 @@ impl App {
     /// The agents panel: the bottom of the sidebar, below the workspace tree.
     pub fn agents_rect(&self) -> R {
         let c = self.sidebar_content();
+        if !self.show_agents {
+            return R { y: c.y + c.h, h: 0.0, ..c };
+        }
         // Each side keeps at least its header and one row.
         let min = self.px(super::PANEL_HEADER_H + super::ROW_H);
         let h = (c.h * self.agents_share).round().clamp(min.min(c.h), (c.h - min).max(min.min(c.h)));

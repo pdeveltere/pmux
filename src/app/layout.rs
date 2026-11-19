@@ -166,6 +166,23 @@ impl App {
         R { x: 0.0, y: self.h - h, w: self.w, h }
     }
 
+    /// The status bar's panel toggles, left to right (none while a prompt has the bar).
+    pub fn panel_buttons(&self) -> Vec<(super::Panel, R)> {
+        if self.prompt.is_some() {
+            return Vec::new();
+        }
+        let r = self.status_rect();
+        let (line, w, gap) = (self.hairline(), self.px(STATUS_H - 2.0), self.px(2.0));
+        let y = r.y + line + self.px(1.0);
+        let h = r.h - line - self.px(2.0);
+        let panels = [super::Panel::Sidebar, super::Panel::Agents, super::Panel::Files];
+        panels.into_iter().enumerate().map(|(i, p)| (p, R { x: self.px(6.0) + i as f32 * (w + gap), y, w, h })).collect()
+    }
+
+    pub(super) fn panel_button_at(&self, x: f32, y: f32) -> Option<super::Panel> {
+        self.panel_buttons().into_iter().find(|(_, r)| r.contains(x, y)).map(|(p, _)| p)
+    }
+
     /// File explorer on the right; empty when hidden or no view is open.
     pub fn files_rect(&self) -> R {
         if !self.show_files || self.explorer().is_none() {

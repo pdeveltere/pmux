@@ -37,6 +37,15 @@ pub static BRANCH: Icon = Icon {
 /// Symlink marker, Zed's arrow_up_right.svg.
 pub static ARROW_UP_RIGHT: Icon = Icon { view: 16.0, layers: &[stroke("M4.5 11.5L11.5 4.5M4.5 4.5L11.5 4.5L11.5 11.5", 1.2)] };
 
+/// Status bar panel toggles (lucide panel-left / bot / panel-right, ISC). Rounded rects written as arcs.
+const FRAME: &str = "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2z";
+pub static PANEL_LEFT: Icon = Icon { view: 24.0, layers: &[stroke(FRAME, 1.5), stroke("M9 3v18", 1.5)] };
+pub static PANEL_RIGHT: Icon = Icon { view: 24.0, layers: &[stroke(FRAME, 1.5), stroke("M15 3v18", 1.5)] };
+pub static BOT: Icon = Icon {
+    view: 24.0,
+    layers: &[stroke("M12 8V4H8M6 8h12a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-8a2 2 0 0 1 2 -2zM2 14h2M20 14h2M15 13v2M9 13v2", 1.5)],
+};
+
 // Folder icons from Zed's assets/icons (folder.svg, folder_open.svg).
 const FOLDER_OPEN_BACK: &str = "M5.46293 7.92298C5.46938 7.6844 5.66427 7.49307 5.90369 7.49307H13.7073C13.9467 7.49307 14.1401 7.6844 14.1335 7.92298C14.1 9.16418 13.9102 12.4787 12.8403 12.4787H4.50925C5.57932 12.4787 5.4293 9.16418 5.46293 7.92298Z";
 
@@ -98,7 +107,7 @@ mod tests {
     #[test]
     fn ui_icons_render() {
         let px = 26;
-        for icon in [&BRANCH, &FOLDER, &FOLDER_OPEN, &ARROW_UP_RIGHT] {
+        for icon in [&BRANCH, &FOLDER, &FOLDER_OPEN, &ARROW_UP_RIGHT, &PANEL_LEFT, &PANEL_RIGHT, &BOT] {
             let m = rasterize(icon, px);
             assert_eq!(m.len(), (px * px) as usize);
             ascii(&m, px as usize);

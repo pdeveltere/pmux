@@ -1,5 +1,5 @@
 //! Build one frame's draw list: sidebar, tabs, terminal grids, file explorer, status bar, menu.
-use crate::app::{ago, is_default_branch, proj_key, subtree_end, ws_key, Action, AgentRow, App, Focus, Group, Pane, Row, State, TabHit, Tree, TreeRow, R};
+use crate::app::{ago, is_default_branch, proj_key, subtree_end, ws_key, Action, AgentRow, App, Focus, Group, Pane, Panel, Row, State, TabHit, Tree, TreeRow, R};
 use crate::git::FileState;
 use crate::gpu::{Inst, COLOR, MASK, RECT};
 use crate::icons::{self, Icon};
@@ -972,7 +972,7 @@ fn status(app: &App, p: &mut Painter) {
     let right = if app.finder.is_some() {
         "↑↓ select · Enter open · Esc close"
     } else if app.prefix {
-        "| split · t tab · 1-9 tab · h/l focus · x close · c clear · j/k worktree · n attention · Tab sidebar · b hide · q quit"
+        "| split · t tab · 1-9 tab · h/l focus · x close · c clear · j/k worktree · n attention · Tab sidebar · b/a/f hide panels · q quit"
     } else {
         let fed = app.focused().filter(|_| app.focus == Focus::Panes).and_then(|id| app.panes.get(&id)?.editor.as_ref());
         let editing = fed.is_some();
@@ -982,12 +982,25 @@ fn status(app: &App, p: &mut Painter) {
             Focus::Panes if editing => "⌘F find · ⌘S save · ⌘Z undo · ⌘⇧Z redo · ⌘X/C line or selection · ⌘[ ] indent · ⌘W close · ⌘T terminal tab",
             Focus::Files => "Enter open · ←→ fold · right-click for actions · Esc back · ⌘⇧E hide",
             Focus::Sidebar => "Enter open · right-click for actions · a add project · w worktree · W workspace · x delete",
-            Focus::Panes => "⌘P go to file · ⌘T tab · ⌘⇧[ ] tabs · ⌘D split · ⌘[ ] focus · ⌘K clear · ⌘E sidebar · ⌘⇧E files · ⌘↑↓ worktree · C-a prefix",
+            Focus::Panes => "⌘P go to file · ⌘T tab · ⌘⇧[ ] tabs · ⌘D split · ⌘[ ] focus · ⌘K clear · ⌘E sidebar · ⌘B ⌘⇧A ⌘⇧E panels · ⌘↑↓ worktree · C-a prefix",
         }
     };
+    let mut fx = x;
+    for (panel, b) in app.panel_buttons() {
+        if app.status_hover == Some(panel) {
+            p.rect(b, HOVER);
+        }
+        let icon = match panel {
+            Panel::Sidebar => &icons::PANEL_LEFT,
+            Panel::Agents => &icons::BOT,
+            Panel::Files => &icons::PANEL_RIGHT,
+        };
+        p.icon(icon, b, if app.panel_shown(panel) { TEXT } else { FAINT });
+        fx = b.x + b.w + app.px(10.0);
+    }
     let rw = p.measure(right, 12.0, app.prefix);
-    let lw = p.text(app.flash_text().unwrap_or_default(), R { x, w: r.w - rw - 3.0 * x, ..r }, 12.0, MUTED, false);
-    if r.w > rw + lw + 3.0 * x {
+    let lw = p.text(app.flash_text().unwrap_or_default(), R { x: fx, w: r.w - rw - 2.0 * x - fx, ..r }, 12.0, MUTED, false);
+    if r.w > rw + lw + 2.0 * x + fx {
         p.text_right(right, r.w - x, r, 12.0, if app.prefix { ACCENT } else { FAINT }, app.prefix);
     }
 }

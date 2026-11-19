@@ -24,27 +24,40 @@ impl App {
             return self.say("open a worktree to browse its files");
         }
         if self.show_files && self.focus == Focus::Files {
-            self.show_files = false;
-            self.files_hover = None;
-            self.link_hover = None;
-            self.focus_default();
-            self.files_rewatch();
-            return;
+            return self.hide_files();
         }
-        let was_hidden = !self.show_files;
-        self.show_files = true;
+        self.show_files_panel();
         self.focus = Focus::Files;
         let vis = self.files_visible_rows();
         if let Some(e) = self.explorer_mut() {
-            if was_hidden {
-                e.rebuild();
-            }
             e.reveal_sel(vis);
         }
-        if was_hidden {
-            self.files_rewatch();
-            self.refresh_status();
+    }
+
+    /// Show the explorer, leaving the focus where it is.
+    pub(super) fn show_files_panel(&mut self) {
+        if self.explorer().is_none() {
+            return self.say("open a worktree to browse its files");
         }
+        if self.show_files {
+            return;
+        }
+        self.show_files = true;
+        if let Some(e) = self.explorer_mut() {
+            e.rebuild();
+        }
+        self.files_rewatch();
+        self.refresh_status();
+    }
+
+    pub(super) fn hide_files(&mut self) {
+        self.show_files = false;
+        self.files_hover = None;
+        self.link_hover = None;
+        if self.focus == Focus::Files {
+            self.focus_default();
+        }
+        self.files_rewatch();
     }
 
     /// Watch the shown explorer's expanded folders (nothing while it's hidden).

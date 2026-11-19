@@ -12,6 +12,16 @@ use std::time::Instant;
 struct Saved {
     current: Option<PathBuf>,
     views: Vec<SavedView>,
+    #[serde(default)]
+    panels: Option<SavedPanels>,
+}
+
+/// Which panels are shown.
+#[derive(Serialize, Deserialize)]
+struct SavedPanels {
+    sidebar: bool,
+    agents: bool,
+    files: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -45,6 +55,9 @@ impl App {
         let tx = self.tx.clone();
         hold::pump(r, move |m| tx.send_event(Ev::Hold(m)).is_ok());
         let saved: Saved = serde_json::from_str(&w.layout).unwrap_or_default();
+        if let Some(p) = &saved.panels {
+            (self.show_sidebar, self.show_agents, self.show_files) = (p.sidebar, p.agents, p.files);
+        }
         let mut placed = std::collections::HashSet::new();
         for t in &w.terms {
             let (cols, rows) = (t.cols as usize, t.rows as usize);
@@ -117,7 +130,7 @@ impl App {
                 tabs: v.tabs.iter().map(|t| SavedTab { panes: t.panes.iter().copied().filter(term).collect(), focus: t.focus }).collect(),
             })
             .collect();
-        let s = serde_json::to_string(&Saved { current: self.current.clone(), views }).unwrap();
+        let s = serde_json::to_string(&Saved { current: self.current.clone(), views, panels: Some(SavedPanels { sidebar: self.show_sidebar, agents: self.show_agents, files: self.show_files }) }).unwrap();
         if s != self.saved_last {
             link.layout(&s);
             self.saved_last = s;

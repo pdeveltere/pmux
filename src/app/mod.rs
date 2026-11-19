@@ -62,6 +62,14 @@ pub enum Ev {
 
 pub type Tx = EventLoopProxy<Ev>;
 
+/// A panel that can be hidden and shown again.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Panel {
+    Sidebar,
+    Agents,
+    Files,
+}
+
 /// Which part of the window takes keyboard input.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Focus {
@@ -78,6 +86,10 @@ pub struct App {
     pub current: Option<PathBuf>,
     pub focus: Focus,
     pub show_sidebar: bool,
+    /// Agents panel shown (at the bottom of the sidebar, when that's shown).
+    pub show_agents: bool,
+    /// Status bar panel button under the mouse.
+    pub status_hover: Option<Panel>,
     pub sidebar_w: f32, // logical px
     pub sel: usize,
     pub hover: Option<usize>,
@@ -192,6 +204,8 @@ impl App {
             current: None,
             focus: Focus::Sidebar,
             show_sidebar: true,
+            show_agents: true,
+            status_hover: None,
             sidebar_w: SIDEBAR_W,
             sel: 0,
             hover: None,
@@ -464,9 +478,46 @@ impl App {
         self.focus = if self.focused().is_some() { Focus::Panes } else { Focus::Sidebar };
     }
 
-    /// ⌘E: sidebar ↔ panes.
+    /// ⌘E: sidebar ↔ panes (showing the sidebar if it's hidden).
     fn toggle_sidebar_focus(&mut self) {
         self.focus = if self.focus == Focus::Sidebar && self.focused().is_some() { Focus::Panes } else { Focus::Sidebar };
+        if self.focus == Focus::Sidebar {
+            self.show_sidebar = true;
+        }
+    }
+
+    /// Is `p` on screen?
+    pub fn panel_shown(&self, p: Panel) -> bool {
+        match p {
+            Panel::Sidebar => self.show_sidebar,
+            Panel::Agents => self.show_sidebar && self.show_agents,
+            Panel::Files => self.show_files && self.explorer().is_some(),
+        }
+    }
+
+    /// Hide `p` if it's shown, else show it (the agents panel brings the sidebar with it).
+    pub(super) fn toggle_panel(&mut self, p: Panel) {
+        let on = !self.panel_shown(p);
+        match p {
+            Panel::Sidebar => {
+                self.show_sidebar = on;
+                if !on {
+                    self.hover = None;
+                    self.agents_hover = None;
+                    self.drag = None;
+                    if self.focus == Focus::Sidebar {
+                        self.focus_default();
+                    }
+                }
+            }
+            Panel::Agents => {
+                self.show_agents = on;
+                self.agents_hover = None;
+                self.show_sidebar |= on;
+            }
+            Panel::Files if on => self.show_files_panel(),
+            Panel::Files => self.hide_files(),
+        }
     }
 
     fn see_focused(&mut self) {

@@ -1,5 +1,5 @@
 //! Keyboard: app shortcuts (⌘ and the C-a prefix), prompts, and routing keys to the focused part.
-use super::{App, Focus, Prompt, PromptKind};
+use super::{App, Focus, Panel, Prompt, PromptKind};
 use crate::{config, input, platform};
 use alacritty_terminal::term::TermMode;
 use std::path::Path;
@@ -95,7 +95,8 @@ impl App {
             (_, Some('w')) => self.close_focused(),
             (_, Some('[')) => self.move_focus(-1),
             (_, Some(']')) => self.move_focus(1),
-            (_, Some('b')) => self.show_sidebar = !self.show_sidebar,
+            (_, Some('b')) => self.toggle_panel(Panel::Sidebar),
+            (_, Some('a')) if self.mods.shift_key() => self.toggle_panel(Panel::Agents),
             (_, Some('e')) if self.mods.shift_key() => self.toggle_files(),
             (_, Some('e')) => self.toggle_sidebar_focus(),
             (_, Some('n')) => self.next_attention(),
@@ -126,7 +127,8 @@ impl App {
             (_, Some('x')) => self.close_focused(),
             (Some(NamedKey::Tab), _) | (_, Some('s')) => self.toggle_sidebar_focus(),
             (_, Some('f')) => self.toggle_files(),
-            (_, Some('b')) => self.show_sidebar = !self.show_sidebar,
+            (_, Some('b')) => self.toggle_panel(Panel::Sidebar),
+            (_, Some('a')) => self.toggle_panel(Panel::Agents),
             (Some(NamedKey::ArrowDown), _) | (_, Some('j')) => self.step_view(1),
             (Some(NamedKey::ArrowUp), _) | (_, Some('k')) => self.step_view(-1),
             (_, Some('n')) => self.next_attention(),

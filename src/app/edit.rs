@@ -214,7 +214,7 @@ impl App {
             (_, _, Some('z')) if shift => e.redo(),
             (_, _, Some('z')) => e.undo(),
             (_, _, Some('y')) => e.redo(),
-            (_, _, Some('a')) => e.select_all(),
+            (_, _, Some('a')) if !shift => e.select_all(),
             (_, _, Some('c')) => platform::clipboard_set(&e.copy()),
             (_, _, Some('x')) => platform::clipboard_set(&e.cut()),
             (_, _, Some(']')) => e.indent(1),
