@@ -166,7 +166,7 @@ impl App {
         R { x: 0.0, y: self.h - h, w: self.w, h }
     }
 
-    /// The status bar's panel toggles, left to right (none while a prompt has the bar).
+    /// The status bar's panel toggles, each on its panel's side as in Zed (none while a prompt has the bar).
     pub fn panel_buttons(&self) -> Vec<(super::Panel, R)> {
         if self.prompt.is_some() {
             return Vec::new();
@@ -175,8 +175,12 @@ impl App {
         let (line, w, gap) = (self.hairline(), self.px(STATUS_H - 2.0), self.px(2.0));
         let y = r.y + line + self.px(1.0);
         let h = r.h - line - self.px(2.0);
-        let panels = [super::Panel::Sidebar, super::Panel::Agents, super::Panel::Files];
-        panels.into_iter().enumerate().map(|(i, p)| (p, R { x: self.px(6.0) + i as f32 * (w + gap), y, w, h })).collect()
+        let left = |i: f32| R { x: self.px(6.0) + i * (w + gap), y, w, h };
+        vec![
+            (super::Panel::Sidebar, left(0.0)),
+            (super::Panel::Agents, left(1.0)),
+            (super::Panel::Files, R { x: r.w - self.px(6.0) - w, y, w, h }),
+        ]
     }
 
     pub(super) fn panel_button_at(&self, x: f32, y: f32) -> Option<super::Panel> {

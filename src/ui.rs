@@ -985,7 +985,7 @@ fn status(app: &App, p: &mut Painter) {
             Focus::Panes => "⌘P go to file · ⌘T tab · ⌘⇧[ ] tabs · ⌘D split · ⌘[ ] focus · ⌘K clear · ⌘E sidebar · ⌘B ⌘⇧A ⌘⇧E panels · ⌘↑↓ worktree · C-a prefix",
         }
     };
-    let mut fx = x;
+    let (mut fx, mut rx) = (x, r.w - x);
     for (panel, b) in app.panel_buttons() {
         if app.status_hover == Some(panel) {
             p.rect(b, HOVER);
@@ -996,11 +996,15 @@ fn status(app: &App, p: &mut Painter) {
             Panel::Files => &icons::PANEL_RIGHT,
         };
         p.icon(icon, b, if app.panel_shown(panel) { TEXT } else { FAINT });
-        fx = b.x + b.w + app.px(10.0);
+        if b.x > r.w / 2.0 {
+            rx = rx.min(b.x - app.px(10.0));
+        } else {
+            fx = b.x + b.w + app.px(10.0);
+        }
     }
     let rw = p.measure(right, 12.0, app.prefix);
-    let lw = p.text(app.flash_text().unwrap_or_default(), R { x: fx, w: r.w - rw - 2.0 * x - fx, ..r }, 12.0, MUTED, false);
-    if r.w > rw + lw + 2.0 * x + fx {
-        p.text_right(right, r.w - x, r, 12.0, if app.prefix { ACCENT } else { FAINT }, app.prefix);
+    let lw = p.text(app.flash_text().unwrap_or_default(), R { x: fx, w: rx - rw - x - fx, ..r }, 12.0, MUTED, false);
+    if rx > rw + lw + x + fx {
+        p.text_right(right, rx, r, 12.0, if app.prefix { ACCENT } else { FAINT }, app.prefix);
     }
 }
