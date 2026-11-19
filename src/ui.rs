@@ -562,12 +562,6 @@ fn tabs(app: &App, p: &mut Painter) {
             label.push_str(" ●");
         }
         let mut x = r.x + app.px(12.0);
-        // State dot when any pane in the tab reports one (most urgent first).
-        if let Some(st) = t.panes.iter().filter_map(|id| app.panes.get(id)?.state()).max() {
-            let dd = app.px(7.0);
-            p.dot(x + dd / 2.0, r.y + r.h / 2.0, dd, state_color(Some(st)));
-            x += dd + app.px(7.0);
-        }
         if let Some(pn) = fp {
             x += agent_icon(app, p, pn, x, r);
         }

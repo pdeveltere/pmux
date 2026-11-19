@@ -344,7 +344,7 @@ impl App {
         let (cw, ch) = (self.cell_w as u16, self.cell_h as u16);
         let current = self.current.as_deref();
         let Some(p) = self.panes.get_mut(&id) else { return false };
-        // Its view's tab bar shows its label and dot, even when it's in another tab.
+        // Its view's tab bar shows its label, even when it's in another tab.
         let in_view = current == Some(p.view.as_path());
         let before = p.state();
         let events = p.vt.feed(data);
