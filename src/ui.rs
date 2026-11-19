@@ -19,6 +19,10 @@ const fn rgb(r: u8, g: u8, b: u8) -> C {
 pub const BG: C = rgb(0x1c, 0x1c, 0x20);
 const SIDEBAR: C = rgb(0x15, 0x15, 0x18);
 const HEADER_FOCUS: C = rgb(0x27, 0x2a, 0x33);
+/// Panel headers and the tab bar: a band a step lighter than the panel below.
+const BAND: C = rgb(0x22, 0x22, 0x28);
+/// Hover on the band (tabs, the + button).
+const BAND_HOVER: C = rgb(0x2a, 0x2a, 0x31);
 const BORDER: C = rgb(0x2c, 0x2c, 0x32);
 const TEXT: C = rgb(0xe4, 0xe4, 0xe7);
 const MUTED: C = rgb(0x8b, 0x8b, 0x94);
@@ -233,15 +237,26 @@ fn panel(app: &App, p: &mut Painter, r: R, border_right: bool) {
     p.rect(R { x: if border_right { r.x + r.w - line } else { r.x }, w: line, ..r }, BORDER);
 }
 
-/// Panel title header, with a bottom border like the tab bar's.
-fn panel_header(app: &App, p: &mut Painter, r: R, title: &str) {
+/// Panel title header: a raised band with an uppercase, letter-spaced title and a bottom border
+/// like the tab bar's. The band is tinted while the panel has keyboard focus.
+fn panel_header(app: &App, p: &mut Painter, r: R, title: &str, focused: bool) {
     if r.h <= 0.0 {
         return;
     }
     let line = app.hairline();
+    p.rect(R { h: r.h - line, ..r }, if focused { HEADER_FOCUS } else { BAND });
     p.rect(R { y: r.y + r.h - line, h: line, ..r }, BORDER);
     let pad = app.px(12.0);
-    p.text(title, R { x: r.x + pad, w: (r.w - 2.0 * pad).max(0.0), h: r.h - line, ..r }, 12.0, MUTED, true);
+    let (end, track) = (r.x + r.w - pad, app.px(1.2));
+    let color = if focused { TEXT } else { MUTED };
+    let mut x = r.x + pad;
+    let mut buf = [0u8; 4];
+    for ch in title.chars().flat_map(char::to_uppercase) {
+        if x >= end {
+            break;
+        }
+        x += p.text(ch.encode_utf8(&mut buf), R { x, w: end - x, h: r.h - line, ..r }, 10.5, color, true) + track;
+    }
 }
 
 /// Row highlight, strongest first: selected in the focused panel, current (open / selected
@@ -324,7 +339,7 @@ fn draw_tree(
 /// Sidebar: workspaces → projects → worktrees, drawn like the explorer (Zed's project panel).
 fn sidebar(app: &App, p: &mut Painter) {
     panel(app, p, app.sidebar_rect(), true);
-    panel_header(app, p, app.sidebar_header(), "Workspaces");
+    panel_header(app, p, app.sidebar_header(), "Workspaces", app.focus == Focus::Sidebar);
     let rows = app.rows();
     let tree = app.sidebar_tree(rows.len());
     let levels: Vec<usize> = rows.iter().map(|r| r.level()).collect();
@@ -422,7 +437,7 @@ fn agents(app: &App, p: &mut Painter) {
     p.rect(R { h: line, ..area }, BORDER);
     let rows = app.agent_rows();
     let header = app.agents_header();
-    panel_header(app, p, R { y: header.y + line, h: header.h - line, ..header }, "Agents");
+    panel_header(app, p, R { y: header.y + line, h: header.h - line, ..header }, "Agents", false);
     let tree = app.agents_tree(rows.len());
     if rows.is_empty() {
         let r = R { y: tree.area.y, h: tree.row_h(), ..tree.area };
@@ -499,7 +514,7 @@ fn files(app: &App, p: &mut Painter) {
     let fr = app.files_rect();
     let Some(e) = app.explorer().filter(|_| fr.w > 0.0) else { return };
     panel(app, p, fr, false);
-    panel_header(app, p, app.files_header(), "Files");
+    panel_header(app, p, app.files_header(), "Files", app.focus == Focus::Files);
     let levels: Vec<usize> = e.entries.iter().map(|en| en.depth).collect();
     let focused = app.focus == Focus::Files;
     let bg = |i: usize| row_bg(i == e.sel && focused, i == e.sel, app.files_hover == Some(i));
@@ -542,7 +557,7 @@ fn tabs(app: &App, p: &mut Painter) {
         return;
     }
     let line = app.hairline();
-    p.rect(bar, SIDEBAR);
+    p.rect(bar, BAND);
     p.rect(R { y: bar.y + bar.h - line, h: line, ..bar }, BORDER);
     let (rects, plus) = app.tab_rects();
     for (i, (t, (r, close))) in v.tabs.iter().zip(rects).enumerate() {
@@ -553,7 +568,7 @@ fn tabs(app: &App, p: &mut Painter) {
             p.rect(r, BG);
             p.rect(R { h: app.px(2.0), ..r }, ACCENT);
         } else if hover {
-            p.rect(R { h: r.h - line, ..r }, HOVER);
+            p.rect(R { h: r.h - line, ..r }, BAND_HOVER);
         }
         p.rect(R { x: r.x + r.w - line, w: line, h: r.h - if shown { 0.0 } else { line }, ..r }, BORDER);
         let fp = t.panes.get(t.focus).and_then(|id| app.panes.get(id));
@@ -586,7 +601,7 @@ fn tabs(app: &App, p: &mut Painter) {
     }
     let on = app.tab_hover == Some(TabHit::New);
     if on {
-        p.rect(plus, HOVER);
+        p.rect(plus, BAND_HOVER);
     }
     p.text_centered("+", plus, 15.0, if on { TEXT } else { MUTED });
 }
