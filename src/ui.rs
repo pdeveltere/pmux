@@ -464,6 +464,7 @@ fn agents(app: &App, p: &mut Painter) {
                 let (_, proj, wt) = app.names(&pn.view);
                 let place = if is_default_branch(&wt) || wt == proj { proj } else { wt };
                 let dim = g == Group::Idle && !is_focus;
+                let left = left + agent_icon(app, p, pn, left, r);
                 let w = p.text(&place, R { x: left, w: (end - left).max(0.0), ..r }, 13.0, if dim { MUTED } else { TEXT }, false);
                 let rest = agent_title(pn).unwrap_or_else(|| pn.kind().to_string());
                 let x = left + w + app.px(5.0);
@@ -473,6 +474,16 @@ fn agents(app: &App, p: &mut Painter) {
             }
         }
     }
+}
+
+/// The pane's agent icon (Claude's mark, in its color) at `x`, vertically centred in `r`.
+/// Returns the width it took, gap included; 0 when the agent has no icon.
+fn agent_icon(app: &App, p: &mut Painter, pn: &Pane, x: f32, r: R) -> f32 {
+    let Some((icon, [cr, cg, cb])) = pn.agent.and_then(icons::agent) else { return 0.0 };
+    let pt = 13.0;
+    let w = app.px(pt);
+    p.icon_pt(icon, R { x, w, ..r }, rgb(cr, cg, cb), pt);
+    w + app.px(6.0)
 }
 
 fn folder(open: bool) -> &'static Icon {
@@ -556,6 +567,9 @@ fn tabs(app: &App, p: &mut Painter) {
             let dd = app.px(7.0);
             p.dot(x + dd / 2.0, r.y + r.h / 2.0, dd, state_color(Some(st)));
             x += dd + app.px(7.0);
+        }
+        if let Some(pn) = fp {
+            x += agent_icon(app, p, pn, x, r);
         }
         let mut right = if hover || shown { close.x - app.px(4.0) } else { r.x + r.w - app.px(10.0) };
         // Split tab: pane count at the right end.

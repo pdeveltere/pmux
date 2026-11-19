@@ -46,6 +46,28 @@ pub static BOT: Icon = Icon {
     layers: &[stroke("M12 8V4H8M6 8h12a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2v-8a2 2 0 0 1 2 -2zM2 14h2M20 14h2M15 13v2M9 13v2", 1.5)],
 };
 
+/// Claude Code's mark, as Herdr shows it (LobeHub icons, MIT). Drawn in its own orange.
+pub static CLAUDE: Icon = Icon {
+    view: 24.0,
+    layers: &[Layer {
+        path: "M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0V10.95h3V5h17.998v5.949zM6 10.949h1.488V8.102H6v2.847zm10.51 0H18V8.102h-1.49v2.847z",
+        stroke: 0.0,
+        alpha: 1.0,
+        even_odd: true,
+        cap: 1,
+        join: 1,
+        xf: ID,
+    }],
+};
+
+/// An agent's icon and color, for agents that have one.
+pub fn agent(name: &str) -> Option<(&'static Icon, [u8; 3])> {
+    match name {
+        "claude" => Some((&CLAUDE, [0xd9, 0x77, 0x57])),
+        _ => None,
+    }
+}
+
 // Folder icons from Zed's assets/icons (folder.svg, folder_open.svg).
 const FOLDER_OPEN_BACK: &str = "M5.46293 7.92298C5.46938 7.6844 5.66427 7.49307 5.90369 7.49307H13.7073C13.9467 7.49307 14.1401 7.6844 14.1335 7.92298C14.1 9.16418 13.9102 12.4787 12.8403 12.4787H4.50925C5.57932 12.4787 5.4293 9.16418 5.46293 7.92298Z";
 
