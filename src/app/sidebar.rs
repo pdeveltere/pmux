@@ -321,15 +321,15 @@ impl App {
         (name, paths, n)
     }
 
-    /// Close right away if nothing runs inside, otherwise ask first. Worktrees never ask: they go
-    /// at once, uncommitted changes and open panes included.
+    /// Close right away if nothing runs inside, otherwise ask first. Projects and worktrees never
+    /// ask: they go at once, open panes (and for worktrees, uncommitted changes) included.
     pub(super) fn request_close(&mut self, c: Close) {
         let (name, _, n) = self.close_info(&c);
         let (c, label) = match c {
             Close::Worktree(_, wt, _) if self.removing.contains(&wt) => return self.say(format!("already deleting {name}")),
             Close::Worktree(proj, wt, _) => return self.close(Close::Worktree(proj, wt, true)),
+            c @ Close::Project(..) => return self.close(c),
             c if n == 0 => return self.close(c),
-            c @ Close::Project(..) => (c, format!("Close {name} and its {}? Files stay on disk. y/n", util::plural(n, "pane"))),
             c => (c, format!("Delete {name} and close its {}? Files stay on disk. y/n", util::plural(n, "pane"))),
         };
         self.prompt = Some(Prompt::new(PromptKind::Confirm(c), label, ""));
