@@ -187,6 +187,7 @@ impl App {
         // While the find bar has the keyboard, text shortcuts don't reach the buffer.
         let finding = e.search.as_ref().is_some_and(|s| s.focused);
         let mut flash = None;
+        let mut saved_settings = false;
         match (input::named(k), input::base_char(k, ModifiersState::empty()), ch.map(|c| c.to_ascii_lowercase())) {
             // Find bar: ⌘F open/focus, ⌘G / ⌘⇧G next/previous, ⌥⌘C match case.
             (_, Some('f'), _) => e.open_search(),
@@ -196,6 +197,10 @@ impl App {
             (_, _, Some('s')) => {
                 let name = e.name();
                 flash = Some(match e.save() {
+                    Ok(()) if e.path == crate::settings::path() => {
+                        saved_settings = true;
+                        "settings applied".into()
+                    }
                     Ok(()) => format!("saved {name}"),
                     Err(err) => format!("couldn't save {name}: {err}"),
                 });
@@ -222,7 +227,10 @@ impl App {
             _ => return false,
         }
         if let Some(f) = flash {
-            self.say(f);
+            // A settings file that doesn't parse says why instead.
+            if !saved_settings || self.reload_settings() {
+                self.say(f);
+            }
         }
         self.reveal_cursor();
         true

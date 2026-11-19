@@ -58,6 +58,8 @@ pub enum Ev {
     WorktreeRemoved(PathBuf, String, Result<(), String>, Option<Sender<Reply>>),
     /// A background highlight of editor pane `.0` at text version `.1` finished.
     Highlighted(u32, u64, Vec<Vec<crate::syntax::Span>>),
+    /// pmux → Settings… in the menu bar.
+    OpenSettings,
 }
 
 pub type Tx = EventLoopProxy<Ev>;
@@ -142,6 +144,7 @@ pub struct App {
     pub finder: Option<crate::finder::Finder>,
     /// Files opened in editors, most recent first.
     recent_files: Vec<PathBuf>,
+    pub settings: crate::settings::Settings,
     socket: PathBuf,
     tx: Tx,
     /// Link to the background pmux holding the terminals (`None` until attached, or after it stopped).
@@ -195,7 +198,7 @@ impl App {
             .map(|w| Workspace { name: w.name, projects: w.projects.iter().filter_map(|p| Project::open(&config::expand(p))).collect() })
             .collect();
         let flash = config_error.as_ref().map(|e| (format!("config not loaded (changes won't be saved): {e}"), Instant::now()));
-        let app = App {
+        let mut app = App {
             config_error,
             workspaces,
             views: HashMap::new(),
@@ -241,6 +244,7 @@ impl App {
             menu: None,
             finder: None,
             recent_files: Vec::new(),
+            settings: Default::default(),
             socket,
             hold: None,
             saved_last: String::new(),
@@ -259,6 +263,7 @@ impl App {
             removing: HashSet::new(),
         };
         app.rewatch();
+        app.reload_settings();
         app
     }
 
@@ -323,6 +328,7 @@ impl App {
                 }
                 self.highlight(id); // edits that came in meanwhile
             }
+            Ev::OpenSettings => self.open_file(&crate::settings::ensure()),
         }
     }
 
@@ -544,6 +550,21 @@ impl App {
     /// Show a message in the status bar for a few seconds.
     pub fn say(&mut self, m: impl Into<String>) {
         self.flash = Some((m.into(), Instant::now()));
+    }
+
+    /// Re-read `settings.toml`, keeping the current settings when it doesn't parse. Whether it did.
+    pub(super) fn reload_settings(&mut self) -> bool {
+        match crate::settings::load() {
+            Ok(s) => {
+                self.settings = s;
+                self.dirty = true;
+                true
+            }
+            Err(e) => {
+                self.say(e);
+                false
+            }
+        }
     }
 
     /// Explorer row whose symlink tooltip shows, once the arrow has been hovered long enough.

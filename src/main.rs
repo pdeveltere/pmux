@@ -12,8 +12,11 @@ mod hold;
 mod icons;
 mod import;
 mod input;
+#[cfg(target_os = "macos")]
+mod macmenu;
 mod platform;
 mod pty;
+mod settings;
 mod syntax;
 mod term;
 mod text;
@@ -145,6 +148,8 @@ impl ApplicationHandler<Ev> for Runner {
         self.app = Some(app);
         window.request_redraw();
         self.window = Some(window);
+        #[cfg(target_os = "macos")]
+        macmenu::install(self.proxy.clone());
     }
 
     fn new_events(&mut self, _: &ActiveEventLoop, cause: StartCause) {

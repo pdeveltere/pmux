@@ -969,7 +969,10 @@ fn status(app: &App, p: &mut Painter) {
         p.text_right("Enter confirm · Esc cancel · Tab complete", r.w - x, r, 12.0, FAINT, false);
         return;
     }
-    let right = if app.finder.is_some() {
+    // Shortcut hints only when asked for (settings.toml); the prefix mode always says it's on.
+    let right = if !app.settings.shortcut_hints {
+        if app.prefix { "C-a" } else { "" }
+    } else if app.finder.is_some() {
         "↑↓ select · Enter open · Esc close"
     } else if app.prefix {
         "| split · t tab · 1-9 tab · h/l focus · x close · c clear · j/k worktree · n attention · Tab sidebar · b/a/f hide panels · q quit"
