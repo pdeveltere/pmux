@@ -30,6 +30,8 @@ const FAINT: C = rgb(0x5c, 0x5c, 0x66);
 const ACCENT: C = rgb(0x5b, 0x9b, 0xff);
 const HOVER: C = rgb(0x22, 0x22, 0x27);
 const SELECT: C = rgb(0x26, 0x33, 0x4a);
+/// Terminal selection: brighter than `SELECT`, so it shows over app backgrounds too.
+const SELECT_TERM: C = rgb(0x3a, 0x4d, 0x70);
 const MENU_BG: C = rgb(0x20, 0x20, 0x25);
 const DANGER: C = rgb(0xf0, 0x6a, 0x6a);
 /// ANSI red, as herdr colors its behind count.
@@ -683,6 +685,7 @@ fn grid(app: &App, p: &mut Painter, pane: &Pane, body: R, focus: bool) {
     let cur = g.cursor.point;
     let show_cursor = mode.contains(TermMode::SHOW_CURSOR) && off == 0;
     let thin = app.scale.max(1.0);
+    let sel = term.selection.as_ref().and_then(|s| s.to_range(term));
     let mut glyphs = std::mem::take(p.cells);
     glyphs.clear();
     for l in 0..lines {
@@ -701,6 +704,15 @@ fn grid(app: &App, p: &mut Painter, pane: &Pane, body: R, focus: bool) {
                     p.rect(R { x: body.x + start as f32 * cw, y, w: (c - start) as f32 * cw, h: ch }, col);
                 }
                 run = bg.map(|b| (c, b));
+            }
+        }
+        // Selection: one run per line over the selected cells.
+        if let Some(sel) = &sel {
+            let line = Line(l as i32 - off);
+            let inside = |c: usize| sel.contains(alacritty_terminal::index::Point::new(line, Column(c)));
+            if let Some(a) = (0..cols).find(|&c| inside(c)) {
+                let b = (a..cols).take_while(|&c| inside(c)).last().unwrap_or(a) + 1;
+                p.rect(R { x: body.x + a as f32 * cw, y, w: (b - a) as f32 * cw, h: ch }, SELECT_TERM);
             }
         }
         for c in 0..cols {

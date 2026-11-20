@@ -304,6 +304,7 @@ impl App {
     /// Typing into a pane: jump back to the live screen first.
     pub(super) fn type_pane(&mut self, id: u32, bytes: &[u8]) {
         if let Some(p) = self.panes.get_mut(&id) {
+            p.vt.term.selection = None;
             if p.vt.display_offset() > 0 {
                 p.vt.scroll(Scroll::Bottom);
             }

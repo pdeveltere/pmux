@@ -86,6 +86,11 @@ impl App {
     fn cmd_key(&mut self, k: &KeyEvent, ch: Option<char>) {
         match (input::named(k), ch.map(|c| c.to_ascii_lowercase())) {
             (_, Some('k')) => self.clear_focused(),
+            (_, Some('c')) => {
+                if let Some(s) = self.term_selection_text() {
+                    platform::clipboard_set(&s);
+                }
+            }
             (_, Some('p')) => self.open_finder(),
             (_, Some('f')) if self.mods.shift_key() => self.open_project_search(),
             (_, Some('v')) => {

@@ -150,6 +150,10 @@ pub struct App {
     mouse_pane: Option<(u32, MouseButton)>,
     /// Editor pane being drag-selected.
     edit_drag: Option<u32>,
+    /// Terminal pane being drag-selected.
+    term_drag: Option<u32>,
+    /// Last terminal click (pane, cell, time, count), for double/triple click.
+    term_click: Option<(u32, alacritty_terminal::index::Point, Instant, u8)>,
     /// Last editor click, for double-click.
     edit_click: Option<(crate::editor::Pos, Instant)>,
     wheel_acc: f32,
@@ -259,6 +263,8 @@ impl App {
             drag: None,
             mouse_pane: None,
             edit_drag: None,
+            term_drag: None,
+            term_click: None,
             edit_click: None,
             wheel_acc: 0.0,
             zoom: None,

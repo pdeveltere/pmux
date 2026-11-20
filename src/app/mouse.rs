@@ -2,12 +2,16 @@
 use super::pane::MouseKind;
 use super::{proj_key, App, Drag, Edge, Row, TabHit};
 use alacritty_terminal::grid::Scroll;
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
+use std::time::{Duration, Instant};
 use alacritty_terminal::term::TermMode;
 use winit::event::{ElementState, MouseButton};
 use winit::window::CursorIcon;
 
 /// How far a pressed row moves before it becomes a drag.
 const DRAG_START: f32 = 4.0;
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
 impl App {
     fn set_cursor(&mut self, icon: CursorIcon) {
@@ -43,6 +47,9 @@ impl App {
         }
         if let Some(id) = self.edit_drag {
             return self.editor_drag(id, x, y);
+        }
+        if let Some(id) = self.term_drag {
+            return self.term_select_drag(id, x, y);
         }
         if let Some((id, b)) = self.mouse_pane {
             return self.pane_mouse(id, MouseKind::Drag(b), x, y);
@@ -190,15 +197,78 @@ impl App {
             }
             return;
         }
-        if pr.body.contains(x, y) && self.panes[&pr.id].vt.mode().intersects(TermMode::MOUSE_MODE) {
+        if !pr.body.contains(x, y) {
+            return;
+        }
+        // Apps with mouse reporting get the click; Shift selects anyway (as in other terminals).
+        if self.panes[&pr.id].vt.mode().intersects(TermMode::MOUSE_MODE) && !self.mods.shift_key() {
             self.mouse_pane = Some((pr.id, b));
             self.pane_mouse(pr.id, MouseKind::Down(b), x, y);
+        } else if b == MouseButton::Left {
+            self.term_select_press(pr.id, x, y);
         }
+    }
+
+    /// Grid point and cell side under (x, y) in terminal pane `id`, clamped to its screen.
+    fn term_point(&self, id: u32, x: f32, y: f32) -> Option<(Point, Side)> {
+        let pr = self.layout().into_iter().find(|p| p.id == id)?;
+        let p = self.panes.get(&id)?;
+        let (cols, rows) = (p.cols.max(1), p.rows.max(1));
+        let fx = ((x - pr.body.x) / self.cell_w).max(0.0);
+        let col = (fx.floor() as usize).min(cols - 1);
+        let row = (((y - pr.body.y) / self.cell_h).floor().max(0.0) as usize).min(rows - 1);
+        let side = if x >= pr.body.x + pr.body.w || fx.fract() >= 0.5 { Side::Right } else { Side::Left };
+        let line = Line(row as i32 - p.vt.display_offset() as i32);
+        Some((Point::new(line, Column(col)), side))
+    }
+
+    /// Left press on a terminal: start a selection (word on double click, line on triple).
+    fn term_select_press(&mut self, id: u32, x: f32, y: f32) {
+        let Some((pt, side)) = self.term_point(id, x, y) else { return };
+        let now = Instant::now();
+        let n = match self.term_click {
+            Some((i, q, t, n)) if i == id && q == pt && now - t < DOUBLE_CLICK => n % 3 + 1,
+            _ => 1,
+        };
+        self.term_click = Some((id, pt, now, n));
+        let ty = [SelectionType::Simple, SelectionType::Semantic, SelectionType::Lines][n as usize - 1];
+        let Some(p) = self.panes.get_mut(&id) else { return };
+        let extend = n == 1 && self.mods.shift_key() && p.vt.term.selection.is_some();
+        match &mut p.vt.term.selection {
+            Some(s) if extend => s.update(pt, side),
+            sel => *sel = Some(Selection::new(ty, pt, side)),
+        }
+        self.term_drag = Some(id);
+    }
+
+    fn term_select_drag(&mut self, id: u32, x: f32, y: f32) {
+        let Some((pt, side)) = self.term_point(id, x, y) else { return };
+        if let Some(s) = self.panes.get_mut(&id).and_then(|p| p.vt.term.selection.as_mut()) {
+            s.update(pt, side);
+            self.dirty = true;
+        }
+    }
+
+    /// The focused terminal's selected text, if any.
+    pub(super) fn term_selection_text(&self) -> Option<String> {
+        let p = self.panes.get(&self.focused()?)?;
+        if p.editor.is_some() || p.search.is_some() {
+            return None;
+        }
+        p.vt.term.selection_to_string().filter(|s| !s.is_empty())
     }
 
     fn on_release(&mut self, x: f32, y: f32) {
         self.resizing = None;
         self.edit_drag = None;
+        if let Some(id) = self.term_drag.take() {
+            // A plain click leaves no selection behind.
+            if let Some(p) = self.panes.get_mut(&id) {
+                if p.vt.term.selection.as_ref().is_some_and(|s| s.is_empty()) {
+                    p.vt.term.selection = None;
+                }
+            }
+        }
         if let Some((id, mb)) = self.mouse_pane.take() {
             self.pane_mouse(id, MouseKind::Up(mb), x, y);
         }
