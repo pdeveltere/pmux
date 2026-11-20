@@ -60,10 +60,17 @@ pub static CLAUDE: Icon = Icon {
     }],
 };
 
+/// OpenCode's mark (LobeHub icons, MIT). Monochrome, so drawn in the text color.
+pub static OPENCODE: Icon = Icon {
+    view: 24.0,
+    layers: &[Layer { path: "M16 6H8v12h8V6zm4 16H4V2h16v20z", stroke: 0.0, alpha: 1.0, even_odd: true, cap: 1, join: 1, xf: ID }],
+};
+
 /// An agent's icon and color, for agents that have one.
 pub fn agent(name: &str) -> Option<(&'static Icon, [u8; 3])> {
     match name {
         "claude" => Some((&CLAUDE, [0xd9, 0x77, 0x57])),
+        "opencode" => Some((&OPENCODE, [0xe4, 0xe4, 0xe7])),
         _ => None,
     }
 }
@@ -129,7 +136,7 @@ mod tests {
     #[test]
     fn ui_icons_render() {
         let px = 26;
-        for icon in [&BRANCH, &FOLDER, &FOLDER_OPEN, &ARROW_UP_RIGHT, &PANEL_LEFT, &PANEL_RIGHT, &BOT] {
+        for icon in [&BRANCH, &FOLDER, &FOLDER_OPEN, &ARROW_UP_RIGHT, &PANEL_LEFT, &PANEL_RIGHT, &BOT, &CLAUDE, &OPENCODE] {
             let m = rasterize(icon, px);
             assert_eq!(m.len(), (px * px) as usize);
             ascii(&m, px as usize);

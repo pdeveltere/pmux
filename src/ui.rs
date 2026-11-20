@@ -505,7 +505,7 @@ fn agents(app: &App, p: &mut Painter) {
     }
 }
 
-/// The pane's agent icon (Claude's mark, in its color) at `x`, vertically centred in `r`.
+/// The pane's agent icon (its mark, in its color) at `x`, vertically centred in `r`.
 /// Returns the width it took, gap included; 0 when the agent has no icon.
 fn agent_icon(app: &App, p: &mut Painter, pn: &Pane, x: f32, r: R) -> f32 {
     let Some((icon, [cr, cg, cb])) = pn.agent.and_then(icons::agent) else { return 0.0 };
