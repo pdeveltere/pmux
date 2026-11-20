@@ -1,5 +1,5 @@
 //! Commands on the current view: new panes and tabs, moving focus, switching worktrees.
-use super::{App, State, View};
+use super::{App, Closed, State, View};
 use std::path::{Path, PathBuf};
 
 impl App {
@@ -44,12 +44,59 @@ impl App {
     /// Close every pane in tab `i` of the current view; the tab disappears once they exit.
     pub(super) fn close_tab(&mut self, i: usize) {
         let ids = self.current_view().and_then(|v| v.tabs.get(i)).map(|t| t.panes.clone()).unwrap_or_default();
+        self.remember_closed(&ids);
         self.kill_panes(ids);
     }
 
     pub(super) fn close_focused(&mut self) {
         if let Some(id) = self.focused() {
+            self.remember_closed(&[id]);
             self.kill_pane(id);
+        }
+    }
+
+    /// Note terminal panes about to close, as one entry, so ⌘⇧T can bring them back.
+    fn remember_closed(&mut self, ids: &[u32]) {
+        const KEEP: usize = 20;
+        let group: Vec<Closed> = ids
+            .iter()
+            .filter_map(|id| self.panes.get(id))
+            .filter(|p| p.is_term())
+            .map(|p| {
+                let r = crate::hold::reopen_info(p.id);
+                Closed { view: p.view.clone(), cwd: r.as_ref().map_or_else(|| p.view.clone(), |r| r.cwd.clone()), cmd: r.and_then(|r| r.cmd) }
+            })
+            .collect();
+        if !group.is_empty() {
+            self.closed.push(group);
+            let n = self.closed.len().saturating_sub(KEEP);
+            self.closed.drain(..n);
+        }
+    }
+
+    /// Open the most recently closed tab again (⌘⇧T): its terminals in a new tab of their view,
+    /// each in the folder it was in, resuming the agent session that ran there.
+    pub(super) fn reopen_closed(&mut self) {
+        let Some(group) = self.closed.pop() else { return self.say("no closed tab to reopen") };
+        let view = group[0].view.clone();
+        if !view.is_dir() {
+            return self.say(format!("{} is gone", view.display()));
+        }
+        for (i, c) in group.iter().enumerate() {
+            let cwd = if c.cwd.is_dir() { &c.cwd } else { &view };
+            match self.spawn_pane(&view, cwd, i == 0) {
+                Ok(id) => {
+                    if let Some(cmd) = &c.cmd {
+                        self.write_pane(id, format!("{cmd}\r").as_bytes());
+                    }
+                }
+                Err(e) => return self.say(format!("spawn failed: {e}")),
+            }
+        }
+        if self.current.as_ref() == Some(&view) {
+            self.focus_panes();
+        } else {
+            self.open_view(view);
         }
     }
 

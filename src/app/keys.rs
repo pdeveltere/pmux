@@ -87,6 +87,7 @@ impl App {
                 }
             }
             (_, Some('d')) => self.split(),
+            (_, Some('t')) if self.mods.shift_key() => self.reopen_closed(),
             (_, Some('t')) => self.new_tab(),
             (_, Some('{')) => self.select_tab(-1, true),
             (_, Some('}')) => self.select_tab(1, true),

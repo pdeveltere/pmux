@@ -82,6 +82,14 @@ pub enum Focus {
     Files,
 }
 
+/// A closed terminal pane, enough to open it again (see `App::reopen_closed`).
+struct Closed {
+    view: PathBuf,
+    cwd: PathBuf,
+    /// Resumes the agent that ran in it.
+    cmd: Option<String>,
+}
+
 pub struct App {
     pub workspaces: Vec<Workspace>,
     pub views: HashMap<PathBuf, View>,
@@ -111,6 +119,8 @@ pub struct App {
     pub agents_share: f32,
     /// A done agent you're looking at: listed under Done until focus leaves it.
     held: Option<u32>,
+    /// Recently closed tabs, newest last: what ⌘⇧T opens again.
+    closed: Vec<Vec<Closed>>,
     pub prefix: bool,
     pub prompt: Option<Prompt>,
     pub folded: HashSet<String>,
@@ -223,6 +233,7 @@ impl App {
             side_sel: Default::default(),
             agents_share: AGENTS_SHARE,
             held: None,
+            closed: Vec::new(),
             prefix: false,
             prompt: None,
             folded: HashSet::new(),

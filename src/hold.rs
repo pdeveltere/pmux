@@ -875,6 +875,21 @@ struct SavedTerm {
     session: Option<String>,
 }
 
+/// What brings a closed terminal back: the folder its shell was in and, if an agent ran there,
+/// the command that resumes its session. From what the background pmux last saved, so the window
+/// reads it just before closing the terminal.
+pub struct Reopen {
+    pub cwd: PathBuf,
+    pub cmd: Option<String>,
+}
+
+pub fn reopen_info(id: u32) -> Option<Reopen> {
+    let saved: Saved = serde_json::from_slice(&std::fs::read(session_file()).ok()?).ok()?;
+    let t = saved.terms.into_iter().find(|t| t.id == id)?;
+    let cmd = t.agent.as_deref().and_then(|a| resume_cmd(a, &t.argv, t.session.as_deref()));
+    Some(Reopen { cwd: t.spawn.cwd, cmd })
+}
+
 /// The command that brings an agent back in a new shell, if we know how.
 fn resume_cmd(agent: &str, argv: &[String], session: Option<&str>) -> Option<String> {
     match agent {
