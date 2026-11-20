@@ -414,6 +414,10 @@ fn sidebar(app: &App, p: &mut Painter) {
         if let Some(n) = behind_of.and_then(|v| app.behind.get(v)) {
             label_end = p.text_right(&format!("\u{2193}{n}"), label_end, r, 11.5, BEHIND, false) - app.px(6.0);
         }
+        // Merged but not deleted yet (an agent is busy in it, or it has uncommitted files).
+        if behind_of.is_some_and(|v| app.merged.contains_key(v)) {
+            label_end = p.text_right("merged", label_end, r, 11.5, MUTED, false) - app.px(6.0);
+        }
         RowLook { icon, icon_color: if current { ACCENT } else { MUTED }, label, label_color: if current { ACCENT } else { fg }, bold: bold || current, label_end }
     });
 

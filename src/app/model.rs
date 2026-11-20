@@ -145,6 +145,8 @@ pub struct Removal {
     pub force: bool,
     /// A `pmux worktree rm` caller waiting for the result.
     pub reply: Option<std::sync::mpsc::Sender<crate::api::Reply>>,
+    /// Set when pmux deletes it by itself because it's merged: then the branch goes too.
+    pub auto: Option<super::merged::Auto>,
 }
 
 /// A context-menu entry.

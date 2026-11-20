@@ -2,7 +2,7 @@
 //!
 //! `App` is one struct; its behaviour is split by concern across the submodules, each adding an
 //! `impl App` block: `layout` (geometry), `pane` (terminals), `sidebar`, `agents` (agents panel), `explorer` (file panel),
-//! `edit` (editor panes), `find` (go to file), `psearch` (find in project), `navigate` (tabs/focus), `keys`, `mouse`, `menu`, `commands` (socket API).
+//! `edit` (editor panes), `find` (go to file), `psearch` (find in project), `navigate` (tabs/focus), `merged` (merged worktrees delete themselves), `keys`, `mouse`, `menu`, `commands` (socket API).
 mod adopt;
 mod agents;
 mod commands;
@@ -13,6 +13,7 @@ mod follow;
 mod keys;
 mod layout;
 mod menu;
+mod merged;
 mod model;
 mod mouse;
 mod navigate;
@@ -57,6 +58,8 @@ pub enum Ev {
     Disk(Vec<PathBuf>),
     /// `git status` for an explorer root finished.
     FileStatus(PathBuf, git::Status),
+    /// Whether linked worktree `wt` is merged, as of git state `key` (`git::merge_key`).
+    Merged { proj: PathBuf, wt: PathBuf, branch: String, key: String, how: Option<git::Merge> },
     /// `git worktree remove` finished.
     WorktreeRemoved(Removal, Result<(), String>),
     /// `pmux import`: the plan, each folder's repo, and the caller waiting for the result.
@@ -196,6 +199,10 @@ pub struct App {
     status_again: bool,
     /// Worktrees being deleted in the background.
     removing: HashSet<PathBuf>,
+    /// Linked worktrees whose branch is merged, waiting to be deleted (`merged`).
+    pub merged: HashMap<PathBuf, merged::Merged>,
+    /// Git state each worktree was last checked for being merged at (`git::merge_key`).
+    merge_keys: HashMap<PathBuf, String>,
     /// Why the config file couldn't be loaded; while set, `save` leaves the file alone.
     config_error: Option<String>,
 }
@@ -292,10 +299,32 @@ impl App {
             status_busy: false,
             status_again: false,
             removing: HashSet::new(),
+            merged: HashMap::new(),
+            merge_keys: HashMap::new(),
         };
         app.rewatch();
         app.reload_settings();
         app
+    }
+
+    fn on_hold(&mut self, m: crate::hold::Msg) {
+        match m {
+            crate::hold::Msg::Output(id, data) => self.dirty |= self.on_output(id, &data),
+            crate::hold::Msg::Exit(id) => self.on_exit(id),
+            crate::hold::Msg::Agent(id, a) => {
+                if let Some(p) = self.panes.get_mut(&id) {
+                    p.set_agent(a.as_deref());
+                }
+            }
+            crate::hold::Msg::Screen(id, st) => {
+                if let Some(p) = self.panes.get_mut(&id) {
+                    p.set_screen(st);
+                }
+            }
+            crate::hold::Msg::Cwd(id, dir) => self.follow_cwd(id, &dir),
+            crate::hold::Msg::Failed(e) => self.say(format!("spawn failed: {e}")),
+            crate::hold::Msg::Lost => self.on_hold_lost(),
+        }
     }
 
     pub fn handle(&mut self, ev: Ev) {
@@ -303,23 +332,13 @@ impl App {
         // dot changes (agents in background worktrees animate constantly).
         self.dirty |= !matches!(ev, Ev::Hold(crate::hold::Msg::Output(..)));
         match ev {
-            Ev::Hold(m) => match m {
-                crate::hold::Msg::Output(id, data) => self.dirty |= self.on_output(id, &data),
-                crate::hold::Msg::Exit(id) => self.on_exit(id),
-                crate::hold::Msg::Agent(id, a) => {
-                    if let Some(p) = self.panes.get_mut(&id) {
-                        p.set_agent(a.as_deref());
-                    }
+            Ev::Hold(m) => {
+                self.on_hold(m);
+                // A merged worktree waits for its busy agents: their state comes from the holder.
+                if self.merged.values().any(|m| !m.kept) {
+                    self.remove_merged();
                 }
-                crate::hold::Msg::Screen(id, st) => {
-                    if let Some(p) = self.panes.get_mut(&id) {
-                        p.set_screen(st);
-                    }
-                }
-                crate::hold::Msg::Cwd(id, dir) => self.follow_cwd(id, &dir),
-                crate::hold::Msg::Failed(e) => self.say(format!("spawn failed: {e}")),
-                crate::hold::Msg::Lost => self.on_hold_lost(),
-            },
+            }
             Ev::Api(req, rtx) if req.args.first().map(String::as_str) == Some("snapshot") => {
                 let path = req.args.get(1).cloned().unwrap_or_else(|| "pmux-snapshot.bmp".into());
                 self.snapshot = Some((path, rtx));
@@ -355,6 +374,7 @@ impl App {
                     self.refresh_status();
                 }
             }
+            Ev::Merged { proj, wt, branch, key, how } => self.merged_checked(proj, wt, branch, key, how),
             Ev::WorktreeRemoved(r, res) => self.worktree_removed(r, res),
             Ev::WorktreeAdded(r) => self.worktree_added(r),
             Ev::FinderFiles(root, files) => self.finder_files(root, files),
@@ -394,10 +414,12 @@ impl App {
         self.workspaces.iter().flat_map(|w| &w.projects)
     }
 
-    /// Watch every project's git metadata and recount every worktree's behind.
+    /// Watch every project's git metadata, recount every worktree's behind, look for merged ones.
     fn rewatch(&self) {
         self.set_git_watch();
-        self.refresh_behind(self.projects().flat_map(|p| p.worktrees.iter().flatten()).map(|w| w.path.clone()).collect());
+        let wts: Vec<PathBuf> = self.projects().flat_map(|p| p.worktrees.iter().flatten()).map(|w| w.path.clone()).collect();
+        self.check_merged(&wts);
+        self.refresh_behind(wts);
     }
 
     fn set_git_watch(&self) {
@@ -437,7 +459,11 @@ impl App {
             return;
         }
         self.set_git_watch();
-        let wts = self.projects().flat_map(|p| p.worktrees.iter().flatten()).map(|w| w.path.clone()).filter(|w| views.contains(w)).collect();
+        let all: HashSet<PathBuf> = self.projects().flat_map(|p| p.worktrees.iter().flatten()).map(|w| w.path.clone()).collect();
+        self.merged.retain(|k, _| all.contains(k));
+        self.merge_keys.retain(|k, _| all.contains(k));
+        let wts: Vec<PathBuf> = all.into_iter().filter(|w| views.contains(w)).collect();
+        self.check_merged(&wts);
         self.refresh_behind(wts);
         if self.explorer().is_some_and(|e| views.contains(&e.root)) {
             self.refresh_status();

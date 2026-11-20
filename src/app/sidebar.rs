@@ -364,7 +364,7 @@ impl App {
         let Some((name, _, n)) = self.close_info(&c) else { return self.say("that's no longer in the sidebar") };
         match c {
             Close::Worktree(_, wt, _) if self.removing.contains(&wt) => self.say(format!("already deleting {name}")),
-            Close::Worktree(proj, wt, force) => self.start_removal(Removal { proj, wt, name, force, reply: None }),
+            Close::Worktree(proj, wt, force) => self.start_removal(Removal { proj, wt, name, force, reply: None, auto: None }),
             c @ Close::Project(..) => self.close(c),
             c if n == 0 => self.close(c),
             c => {
@@ -379,7 +379,7 @@ impl App {
         self.leave_views(&paths);
         match c {
             // Off the UI thread: removing a big checkout takes a while. The row stays until done.
-            Close::Worktree(proj, wt, force) => self.start_removal(Removal { proj, wt, name, force, reply: None }),
+            Close::Worktree(proj, wt, force) => self.start_removal(Removal { proj, wt, name, force, reply: None, auto: None }),
             Close::Workspace(n) => {
                 if let Some(w) = self.ws_index(&n) {
                     let ws = self.workspaces.remove(w);
@@ -423,13 +423,30 @@ impl App {
         self.removing.insert(r.wt.clone());
         let tx = self.tx.clone();
         std::thread::spawn(move || {
+            let mut r = r;
+            if r.auto.is_some() {
+                git::drop_untracked_links(&r.wt);
+            }
             let res = git::remove(&r.proj, &r.wt, r.force);
+            if let (Ok(()), Some(a)) = (&res, r.auto.as_mut()) {
+                a.branch_err = git::delete_branch(&r.proj, &a.branch, a.how.force_delete()).err();
+            }
             let _ = tx.send_event(Ev::WorktreeRemoved(r, res));
         });
     }
 
     pub(super) fn worktree_removed(&mut self, r: Removal, res: Result<(), String>) {
         self.removing.remove(&r.wt);
+        if let Some(auto) = &r.auto {
+            if res.is_ok() {
+                self.leave_views(std::slice::from_ref(&r.wt));
+            }
+            self.merged_removed(&r.wt, &r.name, auto, &res);
+            self.reload_git();
+            self.sel = self.sel.min(self.rows().len().saturating_sub(1));
+            self.dirty = true;
+            return;
+        }
         let answer = match res {
             Ok(()) => {
                 // Its terminals ran in a folder that's gone now.

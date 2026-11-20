@@ -222,6 +222,6 @@ impl App {
         if force {
             self.leave_views(std::slice::from_ref(&wt));
         }
-        self.start_removal(Removal { proj, wt, name, force, reply: Some(rtx) });
+        self.start_removal(Removal { proj, wt, name, force, reply: Some(rtx), auto: None });
     }
 }
