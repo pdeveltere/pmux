@@ -10,13 +10,16 @@ impl App {
         let rows = self.rows();
         let fold = |app: &Self, key: String| item(if app.folded.contains(&key) { "Expand" } else { "Collapse" }, Action::Toggle(key));
         let items: Vec<MenuItem> = match row.and_then(|i| rows.get(i).copied()) {
-            Some(Row::Ws(w)) => vec![
-                item("New project…", Action::AddProject(Some(w))),
-                item("Rename…", Action::RenameWorkspace(w)),
-                fold(self, ws_key(&self.workspaces[w].name)),
-                sep(),
-                item("Delete workspace", Action::Delete(Close::Workspace(w))),
-            ],
+            Some(Row::Ws(w)) => {
+                let name = self.workspaces[w].name.clone();
+                vec![
+                    item("New project…", Action::AddProject(Some(name.clone()))),
+                    item("Rename…", Action::RenameWorkspace(name.clone())),
+                    fold(self, ws_key(&name)),
+                    sep(),
+                    item("Delete workspace", Action::Delete(Close::Workspace(name))),
+                ]
+            }
             Some(Row::Proj(w, p)) => {
                 let pr = self.project(w, p);
                 let mut v = vec![item("Open", Action::Open(pr.path.clone()))];
@@ -27,7 +30,7 @@ impl App {
                     v.push(fold(self, proj_key(&pr.path)));
                 }
                 v.extend(path_items(&pr.path));
-                v.extend([sep(), item("Close project", Action::Delete(Close::Project(w, p)))]);
+                v.extend([sep(), item("Close project", Action::Delete(Close::Project(pr.path.clone())))]);
                 v
             }
             Some(Row::Wt(w, p, t)) => {
@@ -89,9 +92,13 @@ impl App {
     pub(super) fn run_action(&mut self, a: Action) {
         self.dirty = true;
         match a {
-            Action::AddProject(w) => self.prompt_add_project(w),
+            Action::AddProject(None) => self.prompt_add_project(None),
+            Action::AddProject(Some(name)) => match self.ws_index(&name) {
+                Some(w) => self.prompt_add_project(Some(w)),
+                None => self.say(format!("workspace {name} no longer exists")),
+            },
             Action::NewWorkspace => self.prompt_new_workspace(),
-            Action::RenameWorkspace(w) => self.prompt_rename_workspace(w),
+            Action::RenameWorkspace(name) => self.prompt_rename_workspace(name),
             Action::Toggle(key) => self.toggle_fold(key),
             Action::NewWorktree(p) => self.prompt_new_worktree(p),
             Action::Open(v) => self.open_view(v),

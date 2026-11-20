@@ -111,13 +111,62 @@ impl App {
                 self.follow_cwd(t.id, dir);
             }
         }
-        self.saved_last.clear();
+        self.saved_last = None;
         self.dirty = true;
         Ok(saved.current.filter(|c| self.views.contains_key(c)))
     }
 
+    /// A cheap fingerprint of what `sync_layout` saves: it runs after every redraw-worthy event
+    /// (terminal output included), and the JSON is only built when this changes.
+    fn layout_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let hasher = std::collections::hash_map::DefaultHasher::new;
+        let mut h = hasher();
+        (&self.current, self.show_sidebar, self.show_agents, self.show_files).hash(&mut h);
+        // Views in any order: combine their hashes with a commutative sum.
+        let views = self.views.iter().fold(0u64, |acc, (path, v)| {
+            let mut vh = hasher();
+            (path, v.tab).hash(&mut vh);
+            for t in &v.tabs {
+                t.focus.hash(&mut vh);
+                t.panes.iter().filter(|id| self.panes.get(id).is_some_and(Pane::is_term)).for_each(|id| id.hash(&mut vh));
+                usize::MAX.hash(&mut vh); // tab boundary
+            }
+            acc.wrapping_add(vh.finish())
+        });
+        views.hash(&mut h);
+        h.finish()
+    }
+
     /// Tell the background pmux the current layout, if it changed since last time.
     pub fn sync_layout(&mut self) {
+        if self.hold.is_none() {
+            return;
+        }
+        let fp = self.layout_hash();
+        if self.saved_last != Some(fp) {
+            self.send_layout();
+            self.saved_last = Some(fp);
+        }
+        let Some(link) = &self.hold else { return };
+        // Titles and explicit states live in the background pmux, so commands sent while the
+        // window is closed see them (and can change them). Compared in place: no allocation
+        // per pane per frame.
+        let mut sent = Vec::new();
+        for p in self.panes.values().filter(|p| p.is_term()) {
+            let state = p.state.map(State::as_str);
+            let same = self.meta_last.get(&p.id).is_some_and(|m| m.title == p.title && m.state.as_deref() == state);
+            if !same {
+                let m = Meta { title: p.title.clone(), state: state.map(String::from) };
+                link.meta(p.id, &m);
+                sent.push((p.id, m));
+            }
+        }
+        self.meta_last.extend(sent);
+        self.meta_last.retain(|id, _| self.panes.contains_key(id));
+    }
+
+    fn send_layout(&self) {
         let Some(link) = &self.hold else { return };
         let term = |id: &u32| self.panes.get(id).is_some_and(Pane::is_term);
         let mut views: Vec<_> = self.views.iter().collect();
@@ -131,20 +180,7 @@ impl App {
             })
             .collect();
         let s = serde_json::to_string(&Saved { current: self.current.clone(), views, panels: Some(SavedPanels { sidebar: self.show_sidebar, agents: self.show_agents, files: self.show_files }) }).unwrap();
-        if s != self.saved_last {
-            link.layout(&s);
-            self.saved_last = s;
-        }
-        // Titles and explicit states live in the background pmux, so commands sent while the
-        // window is closed see them (and can change them).
-        for p in self.panes.values().filter(|p| p.is_term()) {
-            let m = Meta { title: p.title.clone(), state: p.state.map(|s| s.as_str().to_string()) };
-            if self.meta_last.get(&p.id) != Some(&m) {
-                link.meta(p.id, &m);
-                self.meta_last.insert(p.id, m);
-            }
-        }
-        self.meta_last.retain(|id, _| self.panes.contains_key(id));
+        link.layout(&s);
     }
 
     /// The background pmux went away, and its terminals with it.

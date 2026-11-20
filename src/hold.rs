@@ -110,13 +110,24 @@ pub fn sock_path() -> PathBuf {
     crate::api::sock_dir().join("hold.sock")
 }
 
+/// One frame, header and payload in a single vectored write: no copy of the payload (terminal
+/// output is up to 64 KiB per frame) and, usually, one syscall.
 fn write_frame(w: &mut impl Write, tag: u8, id: u32, payload: &[u8]) -> io::Result<()> {
-    let mut b = Vec::with_capacity(9 + payload.len());
-    b.push(tag);
-    b.extend(id.to_le_bytes());
-    b.extend((payload.len() as u32).to_le_bytes());
-    b.extend(payload);
-    w.write_all(&b)
+    let mut h = [0u8; 9];
+    h[0] = tag;
+    h[1..5].copy_from_slice(&id.to_le_bytes());
+    h[5..9].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+    let mut bufs = [io::IoSlice::new(&h), io::IoSlice::new(payload)];
+    let mut bufs = &mut bufs[..];
+    while !bufs.is_empty() {
+        match w.write_vectored(bufs) {
+            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(n) => io::IoSlice::advance_slices(&mut bufs, n),
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 fn read_frame(r: &mut impl Read) -> io::Result<(u8, u32, Vec<u8>)> {
@@ -958,5 +969,36 @@ impl Holder {
         self.layout = saved.layout;
         self.next_id = self.next_id.max(saved.next_id);
         eprintln!("pmux hold: restored {} terminals", self.terms.len());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_frame, write_frame};
+    use std::io::{self, Write};
+
+    /// Takes at most 5 bytes per write (vectored or not), like a full socket buffer would.
+    struct Trickle(Vec<u8>);
+    impl Write for Trickle {
+        fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+            let n = b.len().min(5);
+            self.0.extend_from_slice(&b[..n]);
+            Ok(n)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn frames_roundtrip_through_partial_writes() {
+        let mut w = Trickle(vec![]);
+        let big: Vec<u8> = (0..70_000u32).map(|i| i as u8).collect();
+        write_frame(&mut w, 103, 7, &big).unwrap();
+        write_frame(&mut w, 104, 9, &[]).unwrap();
+        let mut r = &w.0[..];
+        assert_eq!(read_frame(&mut r).unwrap(), (103, 7, big));
+        assert_eq!(read_frame(&mut r).unwrap(), (104, 9, vec![]));
+        assert!(r.is_empty());
     }
 }

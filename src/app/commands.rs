@@ -1,5 +1,5 @@
 //! The socket API: `pmux <command>` from inside or outside a pane.
-use super::{App, Close, Pane, State};
+use super::{App, Close, Pane, Removal, State};
 use crate::api::{Reply, Request};
 use crate::config;
 use std::path::PathBuf;
@@ -37,7 +37,7 @@ impl App {
 
     /// Ask-free close for the API: refuses while panes are open unless forced.
     fn api_close(&mut self, c: Close, force: bool) -> Reply {
-        let (name, _, n) = self.close_info(&c);
+        let Some((name, _, n)) = self.close_info(&c) else { return Reply::err("no such workspace or project") };
         if n > 0 && !force {
             return Reply::err(format!("{name} has {n} open pane(s); add --force to close them"));
         }
@@ -75,7 +75,6 @@ impl App {
                 Reply::ok("")
             }
             ["open", path] => self.api_open(me, path),
-            ["import", json] => self.api_import(json),
             ["new", rest @ ..] => {
                 let (tab, cmd) = match rest {
                     ["--tab", cmd @ ..] => (true, cmd),
@@ -109,8 +108,8 @@ impl App {
                 Ok(()) => Reply::ok(""),
                 Err(e) => Reply::err(e),
             },
-            ["ws", "rm", name, ..] => match self.workspaces.iter().position(|w| w.name == *name) {
-                Some(w) => self.api_close(Close::Workspace(w), force),
+            ["ws", "rm", name, ..] => match self.ws_index(name) {
+                Some(_) => self.api_close(Close::Workspace(name.to_string()), force),
                 None => Reply::err(format!("no workspace {name}")),
             },
             ["project", "add", dir, rest @ ..] => {
@@ -126,9 +125,9 @@ impl App {
             }
             ["project", "rm", t, ..] => {
                 let path = std::fs::canonicalize(config::expand(t)).ok();
-                let hit = self.workspaces.iter().enumerate().find_map(|(w, ws)| ws.projects.iter().position(|p| Some(&p.path) == path.as_ref() || p.name == *t).map(|p| (w, p)));
+                let hit = self.projects().find(|p| Some(&p.path) == path.as_ref() || p.name == *t).map(|p| p.path.clone());
                 match hit {
-                    Some((w, p)) => self.api_close(Close::Project(w, p), force),
+                    Some(p) => self.api_close(Close::Project(p), force),
                     None => Reply::err(format!("no project {t}")),
                 }
             }
@@ -216,14 +215,13 @@ impl App {
         if n > 0 && !force {
             return refuse(format!("worktree has {n} open pane(s); add --force"));
         }
-        let c = Close::Worktree(proj.clone(), wt.clone(), force);
-        let (name, paths, _) = self.close_info(&c);
+        let name = format!("worktree {}", self.names(&wt).2);
         if self.removing.contains(&wt) {
             return refuse(format!("already deleting {name}"));
         }
         if force {
-            self.leave_views(&paths);
+            self.leave_views(std::slice::from_ref(&wt));
         }
-        self.start_removal(proj, wt, force, name, Some(rtx));
+        self.start_removal(Removal { proj, wt, name, force, reply: Some(rtx) });
     }
 }

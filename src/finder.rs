@@ -31,21 +31,36 @@ pub struct Finder {
     /// First visible result.
     pub top: usize,
     pub hover: Option<usize>,
+    /// The file list is still being read (`list` runs on a thread: `git ls-files` of a big repo
+    /// takes a moment, and the popup shows at once).
+    pub loading: bool,
 }
 
 impl Finder {
-    /// Index `root`; `recent` are absolute paths, most recent first.
+    /// Index `root` now (blocking); `recent` are absolute paths, most recent first.
+    #[cfg(test)]
     pub fn new(root: PathBuf, recent: &[PathBuf]) -> Self {
-        let mut files = list(&root);
+        let mut f = Self::loading(root.clone());
+        f.set_files(list(&root), recent);
+        f
+    }
+
+    /// An empty popup for `root`, waiting for `set_files` (from `list` on another thread).
+    pub fn loading(root: PathBuf) -> Self {
+        Finder { root, files: vec![], recent: vec![], query: String::new(), matches: vec![], sel: 0, top: 0, hover: None, loading: true }
+    }
+
+    /// The file list arrived: match the query typed so far against it.
+    pub fn set_files(&mut self, mut files: Vec<String>, recent: &[PathBuf]) {
         files.sort_unstable();
-        let recent = recent
+        self.recent = recent
             .iter()
-            .filter_map(|p| p.strip_prefix(&root).ok())
+            .filter_map(|p| p.strip_prefix(&self.root).ok())
             .filter_map(|r| files.binary_search(&r.to_string_lossy().into_owned()).ok())
             .collect();
-        let mut f = Finder { root, files, recent, query: String::new(), matches: vec![], sel: 0, top: 0, hover: None };
-        f.update();
-        f
+        self.files = files;
+        self.loading = false;
+        self.update();
     }
 
     pub fn path(&self, m: usize) -> Option<PathBuf> {
@@ -89,7 +104,8 @@ impl Finder {
 }
 
 /// Files under `root`: git's view (tracked + untracked, minus ignored) in a repo, else a walk.
-fn list(root: &Path) -> Vec<String> {
+/// Blocking: call off the UI thread.
+pub fn list(root: &Path) -> Vec<String> {
     let git = |args: &[&str]| {
         let o = Command::new("git").arg("-C").arg(root).args(args).output().ok().filter(|o| o.status.success())?;
         Some(String::from_utf8_lossy(&o.stdout).split('\0').filter(|s| !s.is_empty()).map(String::from).collect::<Vec<_>>())

@@ -121,9 +121,22 @@ fn git_color(g: FileState) -> C {
 }
 
 
+/// A glyph to draw in a cell grid: char, style, x, baseline y, color.
+type CellGlyph = (char, u8, f32, f32, C);
+
+/// Buffers a frame is built in, kept between frames so drawing doesn't allocate them anew
+/// (a full-screen terminal is thousands of entries).
+#[derive(Default)]
+pub struct FrameBufs {
+    pub insts: Vec<Inst>,
+    cells: Vec<CellGlyph>,
+}
+
 pub struct Painter<'a> {
-    pub out: Vec<Inst>,
+    pub out: &'a mut Vec<Inst>,
     pub fonts: &'a mut Fonts,
+    /// Scratch for a pane's glyphs, drawn after its backgrounds and cursor.
+    cells: &'a mut Vec<CellGlyph>,
 }
 
 impl Painter<'_> {
@@ -215,8 +228,10 @@ impl Painter<'_> {
     }
 }
 
-pub fn frame(app: &App, fonts: &mut Fonts) -> Vec<Inst> {
-    let mut p = Painter { out: Vec::with_capacity(8192), fonts };
+/// Build the frame into `bufs.insts` (replacing what was there).
+pub fn frame(app: &App, fonts: &mut Fonts, bufs: &mut FrameBufs) {
+    bufs.insts.clear();
+    let mut p = Painter { out: &mut bufs.insts, fonts, cells: &mut bufs.cells };
     if app.show_sidebar {
         sidebar(app, &mut p);
     }
@@ -227,7 +242,6 @@ pub fn frame(app: &App, fonts: &mut Fonts) -> Vec<Inst> {
     finder(app, &mut p);
     menu(app, &mut p);
     link_tooltip(app, &mut p);
-    p.out
 }
 
 /// Panel background and its border on the side facing the panes.
@@ -665,7 +679,8 @@ fn grid(app: &App, p: &mut Painter, pane: &Pane, body: R, focus: bool) {
     let cur = g.cursor.point;
     let show_cursor = mode.contains(TermMode::SHOW_CURSOR) && off == 0;
     let thin = app.scale.max(1.0);
-    let mut glyphs: Vec<(char, u8, f32, f32, C)> = Vec::with_capacity(lines * cols);
+    let mut glyphs = std::mem::take(p.cells);
+    glyphs.clear();
     for l in 0..lines {
         let row = &g[Line(l as i32 - off)];
         let y = body.y + l as f32 * ch;
@@ -718,14 +733,13 @@ fn grid(app: &App, p: &mut Painter, pane: &Pane, body: R, focus: bool) {
             p.outline(r, thin, FAINT);
         }
     }
-    for (c, style, x, y, mut fg) in glyphs {
-        if cursor_cell == Some((x, y)) {
-            fg = BG;
-        }
+    for &(c, style, x, y, fg) in &glyphs {
+        let fg = if cursor_cell == Some((x, y)) { BG } else { fg };
         if let Some((gl, gx, gy)) = p.fonts.cell(c, style) {
             p.glyph(gl, x + gx as f32, y + gy as f32, fg);
         }
     }
+    *p.cells = glyphs;
 }
 
 /// Color and font style (bit 0 bold, bit 1 italic) for a highlight, after Zed's One Dark.
@@ -761,7 +775,8 @@ fn editor(app: &App, p: &mut Painter, ed: &crate::editor::Editor, body: R, focus
     let sel = ed.selection();
     let matches = ed.search.as_ref().map_or(&[][..], |s| &s.matches[..]);
     let end = (ed.top + g.rows + 1).min(ed.lines.len());
-    let mut glyphs: Vec<(char, u8, f32, f32, C)> = Vec::new();
+    let mut glyphs = std::mem::take(p.cells);
+    glyphs.clear();
     for l in ed.top..end {
         let y = g.text.y + (l - ed.top) as f32 * ch;
         if y >= body.y + body.h {
@@ -813,11 +828,12 @@ fn editor(app: &App, p: &mut Painter, ed: &crate::editor::Editor, body: R, focus
             x += w;
         }
     }
-    for (c, style, x, y, fg) in glyphs {
+    for &(c, style, x, y, fg) in &glyphs {
         if let Some((gl, gx, gy)) = p.fonts.cell(c, style) {
             p.glyph(gl, x + gx as f32, y + gy as f32, fg);
         }
     }
+    *p.cells = glyphs;
     let finding = ed.search.as_ref().is_some_and(|s| s.focused);
     if let (Some(bar), Some(s)) = (g.bar, &ed.search) {
         search_bar(app, p, ed, s, bar, focus);
@@ -910,7 +926,13 @@ fn finder(app: &App, p: &mut Painter) {
     p.rect(R { x: ir.x + tw + app.px(1.0), y: input.y + ((input.h - ch) / 2.0).round(), w: app.px(1.5), h: ch }, ACCENT);
 
     if f.matches.is_empty() {
-        let msg = if f.files.is_empty() { "No files" } else { "No matches" };
+        let msg = if f.loading {
+            "Indexing files…"
+        } else if f.files.is_empty() {
+            "No files"
+        } else {
+            "No matches"
+        };
         let row = app.finder_row(0);
         p.text(msg, R { x: row.x + app.px(8.0), w: row.w - app.px(16.0), ..row }, 13.0, MUTED, false);
         return;

@@ -1,9 +1,8 @@
 //! Sidebar: the workspace → project → worktree tree, its keys, reordering, adding and closing.
-use super::{proj_key, subtree_end, ws_key, App, Close, Drop, Ev, Focus, Project, Prompt, PromptKind, Row, Workspace};
+use super::{proj_key, subtree_end, ws_key, App, Close, Drop, Ev, Focus, Project, Prompt, PromptKind, Removal, Row, Workspace};
 use crate::api::Reply;
 use crate::{config, git, input, util};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Sender;
 use winit::event::KeyEvent;
 use winit::keyboard::NamedKey;
 
@@ -59,6 +58,25 @@ impl App {
     fn select_row(&mut self, row: Row) {
         if let Some(i) = self.rows().iter().position(|r| *r == row) {
             self.sel = i;
+        }
+    }
+
+    /// Workspace by name.
+    pub(super) fn ws_index(&self, name: &str) -> Option<usize> {
+        self.workspaces.iter().position(|w| w.name == name)
+    }
+
+    /// (workspace, project) of the project at `path`.
+    pub(super) fn proj_index(&self, path: &Path) -> Option<(usize, usize)> {
+        self.workspaces.iter().enumerate().find_map(|(w, ws)| ws.projects.iter().position(|p| p.path == path).map(|p| (w, p)))
+    }
+
+    /// The close target for a workspace or project row.
+    fn close_of(&self, row: Row) -> Option<Close> {
+        match row {
+            Row::Ws(w) => Some(Close::Workspace(self.workspaces[w].name.clone())),
+            Row::Proj(w, p) => Some(Close::Project(self.project(w, p).path.clone())),
+            Row::Wt(..) => None,
         }
     }
 
@@ -141,9 +159,12 @@ impl App {
                     self.prompt_new_worktree(self.project(w, p).path.clone())
                 }
                 (Some('w'), _) => self.say("not a git project"),
-                (Some('x'), Row::Ws(w)) => self.request_close(Close::Workspace(w)),
-                (Some('x'), Row::Proj(w, p)) => self.request_close(Close::Project(w, p)),
                 (Some('x'), Row::Wt(..)) => self.say("x closes a project or workspace; right-click deletes a worktree"),
+                (Some('x'), _) => {
+                    if let Some(c) = self.close_of(row) {
+                        self.request_close(c);
+                    }
+                }
                 (Some('q'), _) => self.quit = true,
                 _ => {}
             }
@@ -222,9 +243,11 @@ impl App {
         self.prompt = Some(Prompt::new(PromptKind::NewWorktree(project), "New worktree branch", ""));
     }
 
-    pub(super) fn prompt_rename_workspace(&mut self, w: usize) {
-        let name = self.workspaces[w].name.clone();
-        self.prompt = Some(Prompt::new(PromptKind::RenameWorkspace(w), "Rename workspace", &name));
+    pub(super) fn prompt_rename_workspace(&mut self, name: String) {
+        if self.ws_index(&name).is_none() {
+            return self.say(format!("workspace {name} no longer exists"));
+        }
+        self.prompt = Some(Prompt::new(PromptKind::RenameWorkspace(name.clone()), "Rename workspace", &name));
     }
 
     /// Add a project to workspace `w` (default: the selected row's workspace, else the last one).
@@ -238,8 +261,8 @@ impl App {
                 0
             }
         };
-        let label = format!("Add project to {}", self.workspaces[w].name);
-        self.prompt = Some(Prompt::new(PromptKind::AddProject(w), label, "~/"));
+        let name = self.workspaces[w].name.clone();
+        self.prompt = Some(Prompt::new(PromptKind::AddProject(name.clone()), format!("Add project to {name}"), "~/"));
     }
 
     /// A workspace name that's not empty and not taken (except by workspace `except`).
@@ -291,9 +314,18 @@ impl App {
         Ok(name)
     }
 
-    /// Create a worktree for a new or existing branch and open it.
+    /// Create a worktree for a new or existing branch, off the UI thread (a checkout of a big
+    /// repo takes a while); `Ev::WorktreeAdded` opens it.
     pub(super) fn add_worktree(&mut self, project: &Path, branch: &str) {
-        match git::add(project, branch) {
+        self.say(format!("creating worktree {branch}..."));
+        let (tx, project, branch) = (self.tx.clone(), project.to_path_buf(), branch.to_string());
+        std::thread::spawn(move || {
+            let _ = tx.send_event(Ev::WorktreeAdded(git::add(&project, &branch)));
+        });
+    }
+
+    pub(super) fn worktree_added(&mut self, r: Result<PathBuf, String>) {
+        match r {
             Ok(dest) => {
                 self.reload_git();
                 self.open_view(dest);
@@ -304,54 +336,63 @@ impl App {
 
     // ---- closing (workspaces / projects: sidebar only, files are never touched) ----
 
-    /// (display name, views it covers, panes open in them).
-    pub(super) fn close_info(&self, c: &Close) -> (String, Vec<PathBuf>, usize) {
+    /// (display name, views it covers, panes open in them); `None` when it's gone from the sidebar.
+    pub(super) fn close_info(&self, c: &Close) -> Option<(String, Vec<PathBuf>, usize)> {
         let (name, paths) = match c {
-            Close::Workspace(w) => {
-                let ws = &self.workspaces[*w];
+            Close::Workspace(n) => {
+                let ws = &self.workspaces[self.ws_index(n)?];
                 (format!("workspace {}", ws.name), ws.projects.iter().flat_map(Project::view_paths).collect())
             }
-            Close::Project(w, p) => {
-                let pr = self.project(*w, *p);
+            Close::Project(path) => {
+                let (w, p) = self.proj_index(path)?;
+                let pr = self.project(w, p);
                 (format!("project {}", pr.name), pr.view_paths())
             }
             Close::Worktree(_, wt, _) => (format!("worktree {}", self.names(wt).2), vec![wt.clone()]),
         };
         let n = paths.iter().map(|v| self.panes_in(v).len()).sum();
-        (name, paths, n)
+        Some((name, paths, n))
     }
 
-    /// Close right away if nothing runs inside, otherwise ask first. Projects and worktrees never
-    /// ask: they go at once, open panes (and for worktrees, uncommitted changes) included.
+    /// Close right away if nothing would be lost, otherwise ask first:
+    /// - a workspace asks when panes run in it;
+    /// - a project never asks (only the sidebar row goes; files stay);
+    /// - a worktree is first removed the safe way (`git worktree remove` without `--force`), and
+    ///   only when git refuses because of uncommitted or untracked files do we ask
+    ///   (`worktree_removed`).
     pub(super) fn request_close(&mut self, c: Close) {
-        let (name, _, n) = self.close_info(&c);
-        let (c, label) = match c {
-            Close::Worktree(_, wt, _) if self.removing.contains(&wt) => return self.say(format!("already deleting {name}")),
-            Close::Worktree(proj, wt, _) => return self.close(Close::Worktree(proj, wt, true)),
-            c @ Close::Project(..) => return self.close(c),
-            c if n == 0 => return self.close(c),
-            c => (c, format!("Delete {name} and close its {}? Files stay on disk. y/n", util::plural(n, "pane"))),
-        };
-        self.prompt = Some(Prompt::new(PromptKind::Confirm(c), label, ""));
+        let Some((name, _, n)) = self.close_info(&c) else { return self.say("that's no longer in the sidebar") };
+        match c {
+            Close::Worktree(_, wt, _) if self.removing.contains(&wt) => self.say(format!("already deleting {name}")),
+            Close::Worktree(proj, wt, force) => self.start_removal(Removal { proj, wt, name, force, reply: None }),
+            c @ Close::Project(..) => self.close(c),
+            c if n == 0 => self.close(c),
+            c => {
+                let label = format!("Delete {name} and close its {}? Files stay on disk. y/n", util::plural(n, "pane"));
+                self.prompt = Some(Prompt::new(PromptKind::Confirm(c), label, ""));
+            }
+        }
     }
 
     pub(super) fn close(&mut self, c: Close) {
-        let (name, paths, _) = self.close_info(&c);
+        let Some((name, paths, _)) = self.close_info(&c) else { return self.say("that's no longer in the sidebar") };
         self.leave_views(&paths);
         match c {
             // Off the UI thread: removing a big checkout takes a while. The row stays until done.
-            Close::Worktree(proj, wt, force) => {
-                self.start_removal(proj, wt, force, name, None);
+            Close::Worktree(proj, wt, force) => self.start_removal(Removal { proj, wt, name, force, reply: None }),
+            Close::Workspace(n) => {
+                if let Some(w) = self.ws_index(&n) {
+                    let ws = self.workspaces.remove(w);
+                    self.folded.remove(&ws_key(&ws.name));
+                    self.closed_tree(format!("deleted {name} from pmux"));
+                }
             }
-            Close::Workspace(w) => {
-                let ws = self.workspaces.remove(w);
-                self.folded.remove(&ws_key(&ws.name));
-                self.closed_tree(format!("deleted {name} from pmux"));
-            }
-            Close::Project(w, p) => {
-                let pr = self.workspaces[w].projects.remove(p);
-                self.folded.remove(&proj_key(&pr.path));
-                self.closed_tree(format!("closed {name}"));
+            Close::Project(path) => {
+                if let Some((w, p)) = self.proj_index(&path) {
+                    let pr = self.workspaces[w].projects.remove(p);
+                    self.folded.remove(&proj_key(&pr.path));
+                    self.closed_tree(format!("closed {name}"));
+                }
             }
         }
         self.sel = self.sel.min(self.rows().len().saturating_sub(1));
@@ -377,31 +418,40 @@ impl App {
     }
 
     /// Run `git worktree remove` off the UI thread; `Ev::WorktreeRemoved` reports back.
-    pub(super) fn start_removal(&mut self, proj: PathBuf, wt: PathBuf, force: bool, name: String, reply: Option<Sender<Reply>>) {
-        self.say(format!("deleting {name}..."));
-        self.removing.insert(wt.clone());
+    pub(super) fn start_removal(&mut self, r: Removal) {
+        self.say(format!("deleting {}...", r.name));
+        self.removing.insert(r.wt.clone());
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let r = git::remove(&proj, &wt, force);
-            let _ = tx.send_event(Ev::WorktreeRemoved(wt, name, r, reply));
+            let res = git::remove(&r.proj, &r.wt, r.force);
+            let _ = tx.send_event(Ev::WorktreeRemoved(r, res));
         });
     }
 
-    pub(super) fn worktree_removed(&mut self, wt: PathBuf, name: String, r: Result<(), String>, reply: Option<Sender<Reply>>) {
-        self.removing.remove(&wt);
-        let answer = match r {
+    pub(super) fn worktree_removed(&mut self, r: Removal, res: Result<(), String>) {
+        self.removing.remove(&r.wt);
+        let answer = match res {
             Ok(()) => {
-                self.step_out(std::slice::from_ref(&wt));
-                self.say(format!("deleted {name}"));
-                Reply::ok(format!("deleted {}", config::tilde(&wt)))
+                // Its terminals ran in a folder that's gone now.
+                self.leave_views(std::slice::from_ref(&r.wt));
+                self.say(format!("deleted {}", r.name));
+                Reply::ok(format!("deleted {}", config::tilde(&r.wt)))
+            }
+            // From the sidebar, unforced, and git refused: uncommitted or untracked files. Ask
+            // before throwing them away (git's message says "use --force to delete it").
+            Err(e) if !r.force && r.reply.is_none() && e.contains("--force") => {
+                let label = format!("{} has uncommitted or untracked files. Delete it and lose them? y/n", r.name);
+                self.prompt = Some(Prompt::new(PromptKind::Confirm(Close::Worktree(r.proj, r.wt, true)), label, ""));
+                self.flash = None;
+                return self.reload_git();
             }
             Err(e) => {
-                let m = format!("couldn't delete {name}: {e}");
+                let m = format!("couldn't delete {}: {e}", r.name);
                 self.say(m.clone());
                 Reply::err(m)
             }
         };
-        if let Some(tx) = reply {
+        if let Some(tx) = r.reply {
             let _ = tx.send(answer);
         }
         self.reload_git();

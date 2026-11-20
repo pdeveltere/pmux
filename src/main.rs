@@ -77,6 +77,8 @@ struct Runner {
     window: Option<Arc<Window>>,
     gpu: Option<gpu::Gpu>,
     fonts: Option<text::Fonts>,
+    /// Reused between frames.
+    bufs: ui::FrameBufs,
 }
 
 impl Runner {
@@ -89,22 +91,23 @@ impl Runner {
         app.cell_w = fonts.cell_w;
         app.cell_h = fonts.cell_h;
         app.apply_layout();
-        let mut insts = ui::frame(app, fonts);
+        ui::frame(app, fonts, &mut self.bufs);
         if fonts.take_overflow() {
-            insts = ui::frame(app, fonts);
+            ui::frame(app, fonts, &mut self.bufs);
         }
+        let insts = &self.bufs.insts;
         gpu.set_atlas_size(fonts.atlas);
         for u in fonts.uploads.drain(..) {
             gpu.upload(u.x, u.y, u.w, u.h, &u.rgba);
         }
         let bg = ui::BG;
-        if !gpu.render(&insts, [bg[0], bg[1], bg[2]]) {
+        if !gpu.render(insts, [bg[0], bg[1], bg[2]]) {
             if let Some(w) = &self.window {
                 w.request_redraw();
             }
         }
         if let Some((path, rtx)) = app.snapshot.take() {
-            let (w, h, px, bgra) = gpu.snapshot(&insts, [bg[0], bg[1], bg[2]]);
+            let (w, h, px, bgra) = gpu.snapshot(insts, [bg[0], bg[1], bg[2]]);
             let r = match gpu::write_bmp(&path, w, h, &px, bgra) {
                 Ok(()) => api::Reply::ok(format!("{path} ({w}x{h})")),
                 Err(e) => api::Reply::err(e.to_string()),
@@ -253,6 +256,6 @@ fn run() {
             std::process::exit(1);
         }
     };
-    let mut r = Runner { proxy, socket, app: None, window: None, gpu: None, fonts: None };
+    let mut r = Runner { proxy, socket, app: None, window: None, gpu: None, fonts: None, bufs: Default::default() };
     let _ = el.run_app(&mut r);
 }

@@ -1,9 +1,11 @@
 //! `pmux import herdr` in the window: projects for the terminals' folders, then one tab per
 //! Herdr tab with a shell per terminal (and its command typed in).
-use super::App;
+use super::{App, Ev};
 use crate::api::Reply;
 use crate::import::Plan;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Sender;
 
 /// Workspace that projects new to pmux land in.
 const IMPORT_WS: &str = "herdr";
@@ -15,6 +17,7 @@ impl App {
     }
 
     /// The repo `dir` belongs to (its main checkout, for a linked worktree), else `dir` itself.
+    /// Runs git: call off the UI thread.
     fn repo_of(dir: &Path) -> PathBuf {
         let out = std::process::Command::new("git").arg("-C").arg(dir).args(["rev-parse", "--path-format=absolute", "--git-common-dir"]).output();
         match out {
@@ -29,11 +32,28 @@ impl App {
         }
     }
 
-    pub(super) fn api_import(&mut self, json: &str) -> Reply {
-        let plan: Plan = match serde_json::from_str(json) {
-            Ok(p) => p,
-            Err(e) => return Reply::err(format!("bad import: {e}")),
-        };
+    /// `pmux import`: look up each folder's repo on a thread (one `git` per folder), then
+    /// `Ev::ImportReady` opens the terminals; the caller gets its reply then.
+    pub(super) fn start_import(&self, json: String, rtx: Sender<Reply>) {
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let plan: Plan = match serde_json::from_str(&json) {
+                Ok(p) => p,
+                Err(e) => return drop(rtx.send(Reply::err(format!("bad import: {e}")))),
+            };
+            let mut repos = HashMap::new();
+            for it in &plan.items {
+                let cwd = std::fs::canonicalize(&it.cwd).unwrap_or_else(|_| it.cwd.clone());
+                if cwd.is_dir() && !repos.contains_key(&cwd) {
+                    repos.insert(cwd.clone(), Self::repo_of(&cwd));
+                }
+            }
+            let _ = tx.send_event(Ev::ImportReady(plan, repos, rtx));
+        });
+    }
+
+    /// Open an import's terminals; `repos` maps each existing folder to its repo.
+    pub(super) fn api_import(&mut self, plan: Plan, repos: &HashMap<PathBuf, PathBuf>) -> Reply {
         // Projects first, so every folder has a view.
         let mut added = Vec::new();
         for it in &plan.items {
@@ -50,7 +70,8 @@ impl App {
                     self.workspaces.len() - 1
                 }
             };
-            if let Ok(name) = self.add_project(w, &Self::repo_of(&cwd).display().to_string()) {
+            let repo = repos.get(&cwd).cloned().unwrap_or_else(|| cwd.clone());
+            if let Ok(name) = self.add_project(w, &repo.display().to_string()) {
                 added.push(name);
             }
         }

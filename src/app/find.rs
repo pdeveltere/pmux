@@ -20,7 +20,19 @@ impl App {
         let Some(root) = self.current.clone() else { return self.say("open a worktree first") };
         self.menu = None;
         self.prompt = None;
-        self.finder = Some(Finder::new(root, &self.recent_files));
+        self.finder = Some(Finder::loading(root.clone()));
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let files = crate::finder::list(&root);
+            let _ = tx.send_event(super::Ev::FinderFiles(root, files));
+        });
+    }
+
+    /// The file list for the ⌘P popup is ready (ignored if the popup closed or moved on).
+    pub(super) fn finder_files(&mut self, root: std::path::PathBuf, files: Vec<String>) {
+        if let Some(f) = self.finder.as_mut().filter(|f| f.root == root && f.loading) {
+            f.set_files(files, &self.recent_files);
+        }
     }
 
     pub(super) fn finder_key(&mut self, k: &KeyEvent, ch: Option<char>) {

@@ -211,3 +211,34 @@ pub fn status(root: &Path) -> Status {
     }
     st
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sh(dir: &Path, args: &[&str]) {
+        let ok = Command::new("git").arg("-C").arg(dir).args(args).output().unwrap().status.success();
+        assert!(ok, "git {args:?}");
+    }
+
+    /// The sidebar removes a worktree without `--force` first and asks only when git refuses
+    /// with a message telling to use `--force` (`App::worktree_removed`): check git says so.
+    #[test]
+    fn unforced_remove_refuses_dirty_worktree_and_says_force() {
+        let tmp = std::env::temp_dir().join(format!("pmux-git-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let (repo, wt) = (tmp.join("repo"), tmp.join("wt"));
+        fs::create_dir_all(&repo).unwrap();
+        sh(&repo, &["init", "-q", "-b", "main"]);
+        sh(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        sh(&repo, &["worktree", "add", "-q", "-b", "feat", wt.to_str().unwrap()]);
+        fs::write(wt.join("new.txt"), "unsaved work").unwrap();
+        let e = remove(&repo, &wt, false).unwrap_err();
+        assert!(e.contains("--force"), "{e}");
+        assert!(wt.join("new.txt").exists(), "nothing deleted");
+        fs::remove_file(wt.join("new.txt")).unwrap();
+        remove(&repo, &wt, false).unwrap();
+        assert!(!wt.exists());
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+}

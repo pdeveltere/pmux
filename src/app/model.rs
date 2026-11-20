@@ -124,22 +124,36 @@ impl View {
     }
 }
 
-/// Something to remove from the sidebar.
+/// Something to remove from the sidebar. Named by identity (workspace name, project path), not
+/// by position: a menu or y/n prompt can stay open while an agent's `pmux ws rm` / `project add`
+/// shifts the lists, and must still act on what it was opened for (or on nothing).
 #[derive(Clone)]
 pub enum Close {
-    Workspace(usize),
-    Project(usize, usize),
+    Workspace(String),
+    Project(PathBuf),
     /// (project path, worktree path, force): `git worktree remove`, deletes the checkout.
     Worktree(PathBuf, PathBuf, bool),
+}
+
+/// A `git worktree remove` in flight: what it removes, and who waits for the answer.
+pub struct Removal {
+    pub proj: PathBuf,
+    pub wt: PathBuf,
+    /// Display name ("worktree feat-x").
+    pub name: String,
+    /// `--force`: also when it has uncommitted changes.
+    pub force: bool,
+    /// A `pmux worktree rm` caller waiting for the result.
+    pub reply: Option<std::sync::mpsc::Sender<crate::api::Reply>>,
 }
 
 /// A context-menu entry.
 #[derive(Clone)]
 pub enum Action {
     /// Add a project to this workspace (`None`: the selected one).
-    AddProject(Option<usize>),
+    AddProject(Option<String>),
     NewWorkspace,
-    RenameWorkspace(usize),
+    RenameWorkspace(String),
     Toggle(String),
     NewWorktree(PathBuf),
     Open(PathBuf),
@@ -177,12 +191,13 @@ pub struct Menu {
 }
 
 pub enum PromptKind {
-    AddProject(usize),
+    /// Add a project to the workspace with this name.
+    AddProject(String),
     NewWorkspace,
     NewWorktree(PathBuf),
-    /// Yes/no before closing something that still has panes.
+    /// Yes/no before closing something that still has panes (or a worktree with changes).
     Confirm(Close),
-    RenameWorkspace(usize),
+    RenameWorkspace(String),
 }
 
 pub struct Prompt {

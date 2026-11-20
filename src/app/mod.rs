@@ -56,8 +56,14 @@ pub enum Ev {
     Disk(Vec<PathBuf>),
     /// `git status` for an explorer root finished.
     FileStatus(PathBuf, git::Status),
-    /// `git worktree remove` finished: (worktree, display name, result, API caller waiting for it).
-    WorktreeRemoved(PathBuf, String, Result<(), String>, Option<Sender<Reply>>),
+    /// `git worktree remove` finished.
+    WorktreeRemoved(Removal, Result<(), String>),
+    /// `pmux import`: the plan, each folder's repo, and the caller waiting for the result.
+    ImportReady(crate::import::Plan, HashMap<PathBuf, PathBuf>, Sender<Reply>),
+    /// The ⌘P popup's file list for this root was read.
+    FinderFiles(PathBuf, Vec<String>),
+    /// `git worktree add` finished: the new checkout.
+    WorktreeAdded(Result<PathBuf, String>),
     /// A background highlight of editor pane `.0` at text version `.1` finished.
     Highlighted(u32, u64, Vec<Vec<crate::syntax::Span>>),
     /// pmux → Settings… in the menu bar.
@@ -161,8 +167,8 @@ pub struct App {
     tx: Tx,
     /// Link to the background pmux holding the terminals (`None` until attached, or after it stopped).
     hold: Option<crate::hold::Link>,
-    /// Layout last sent to it.
-    saved_last: String,
+    /// Fingerprint of the layout last sent to it (`None`: send it next time).
+    saved_last: Option<u64>,
     /// Title and state last sent to it, per terminal.
     meta_last: HashMap<u32, crate::hold::Meta>,
     watcher: watch::Watcher,
@@ -262,7 +268,7 @@ impl App {
             settings: Default::default(),
             socket,
             hold: None,
-            saved_last: String::new(),
+            saved_last: None,
             meta_last: HashMap::new(),
             watcher: watch::Watcher::new(tx.clone(), Ev::Git),
             files_watcher: watch::Watcher::new(tx.clone(), |_| Ev::Fs),
@@ -311,6 +317,8 @@ impl App {
             }
             // Answered when git finishes, so it doesn't hold up the UI thread.
             Ev::Api(req, rtx) if req.args.len() > 2 && req.args[0] == "worktree" && req.args[1] == "rm" => self.api_worktree_rm(&req.args, rtx),
+            // Answered once git has looked up the folders' repos, off the UI thread.
+            Ev::Api(mut req, rtx) if req.args.len() == 2 && req.args[0] == "import" => self.start_import(req.args.remove(1), rtx),
             Ev::Api(req, rtx) => {
                 let r = self.on_api(req);
                 let _ = rtx.send(r);
@@ -338,7 +346,13 @@ impl App {
                     self.refresh_status();
                 }
             }
-            Ev::WorktreeRemoved(wt, name, r, reply) => self.worktree_removed(wt, name, r, reply),
+            Ev::WorktreeRemoved(r, res) => self.worktree_removed(r, res),
+            Ev::WorktreeAdded(r) => self.worktree_added(r),
+            Ev::FinderFiles(root, files) => self.finder_files(root, files),
+            Ev::ImportReady(plan, repos, rtx) => {
+                let r = self.api_import(plan, &repos);
+                let _ = rtx.send(r);
+            }
             Ev::Highlighted(id, version, hl) => {
                 if let Some(ed) = self.panes.get_mut(&id).and_then(|p| p.editor.as_mut()) {
                     ed.set_highlight(version, hl);
