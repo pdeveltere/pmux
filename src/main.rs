@@ -98,7 +98,11 @@ impl Runner {
             gpu.upload(u.x, u.y, u.w, u.h, &u.rgba);
         }
         let bg = ui::BG;
-        gpu.render(&insts, [bg[0], bg[1], bg[2]]);
+        if !gpu.render(&insts, [bg[0], bg[1], bg[2]]) {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
         if let Some((path, rtx)) = app.snapshot.take() {
             let (w, h, px, bgra) = gpu.snapshot(&insts, [bg[0], bg[1], bg[2]]);
             let r = match gpu::write_bmp(&path, w, h, &px, bgra) {

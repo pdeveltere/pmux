@@ -470,9 +470,10 @@ impl Holder {
             }
             KILL => {
                 if let Some(t) = self.terms.get(&id) {
-                    unsafe {
-                        libc::kill(-t.pgid, libc::SIGHUP);
-                        libc::kill(-t.shell, libc::SIGHUP);
+                    for pg in [t.pgid, t.shell] {
+                        if pg > 1 {
+                            unsafe { libc::kill(-pg, libc::SIGHUP) };
+                        }
                     }
                 }
             }
@@ -600,8 +601,10 @@ impl Holder {
         let mut changed = None;
         t.last_probe = Instant::now();
         {
+            // 0 / -1: no foreground job (the shell is exiting) or an error. Never adopt it:
+            // `kill(-0, …)` would signal the holder's own process group.
             let pg = pty::fg_pgrp(&t.master);
-            if pg != t.pgid {
+            if pg > 0 && pg != t.pgid {
                 t.pgid = pg;
                 let a = pty::proc_path(pg).as_deref().and_then(pty::agent_of).map(String::from);
                 if a != t.info.agent {
@@ -764,11 +767,13 @@ impl Holder {
                 if let Some(t) = self.terms.get_mut(&id) {
                     t.info.meta.state = state;
                 }
+                self.save();
                 Reply::ok("")
             }
             ["title", text @ ..] if !text.is_empty() => match me.and_then(|id| self.terms.get_mut(&id)) {
                 Some(t) => {
                     t.info.meta.title = Some(text.join(" "));
+                    self.save();
                     Reply::ok("")
                 }
                 None => Reply::err("not inside a pmux pane"),

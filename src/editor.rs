@@ -1,7 +1,7 @@
 //! A text buffer for editor panes: lines, a cursor with an optional selection, undo/redo, save.
 //! Positions are (line, column) with the column counted in chars. No rendering or input here.
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// Display width of a tab, in cells.
 pub const TAB: usize = 4;
@@ -77,6 +77,11 @@ pub struct Editor {
     modified_at: std::cell::Cell<(u64, bool)>,
     /// ⌘W pressed once on a modified buffer: the next one discards.
     pub close_armed: bool,
+    /// The file's modification time when last read or written: another program (an agent)
+    /// changed it when the file's differs.
+    disk: Option<SystemTime>,
+    /// ⌘S pressed once on a file changed on disk: the next one overwrites it.
+    save_armed: bool,
     /// Tree-sitter language, if we have one for this file.
     pub lang: Option<&'static str>,
     /// Highlight spans per line, as of `hl_version`. Computed off the UI thread (`highlight_job`);
@@ -105,6 +110,22 @@ pub struct Search {
     version: u64,
 }
 
+fn mtime(p: &Path) -> Option<SystemTime> {
+    std::fs::metadata(p).and_then(|m| m.modified()).ok()
+}
+
+fn read_text(path: &Path) -> Result<String, String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    if bytes.contains(&0) {
+        return Err("binary file".into());
+    }
+    String::from_utf8(bytes).map_err(|_| "not UTF-8 text".to_string())
+}
+
+fn split_lines(text: &str) -> Vec<String> {
+    text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l).to_string()).collect()
+}
+
 fn byte(s: &str, col: usize) -> usize {
     s.char_indices().nth(col).map_or(s.len(), |(i, _)| i)
 }
@@ -130,17 +151,16 @@ fn class(c: char) -> u8 {
 
 impl Editor {
     pub fn open(path: &Path) -> Result<Self, String> {
-        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-        if bytes.contains(&0) {
-            return Err("binary file".into());
-        }
-        let text = String::from_utf8(bytes).map_err(|_| "not UTF-8 text".to_string())?;
-        Ok(Self::from_text(path.to_path_buf(), &text))
+        let disk = mtime(path);
+        let text = read_text(path)?;
+        let mut e = Self::from_text(path.to_path_buf(), &text);
+        e.disk = disk;
+        Ok(e)
     }
 
     pub fn from_text(path: PathBuf, text: &str) -> Self {
         let crlf = text.contains("\r\n");
-        let lines: Vec<String> = text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l).to_string()).collect();
+        let lines = split_lines(text);
         let lang = crate::syntax::lang_for(&path);
         let saved_copy = lines.clone();
         Editor {
@@ -160,6 +180,8 @@ impl Editor {
             base_cur: Pos::default(),
             last_edit: None,
             close_armed: false,
+            disk: None,
+            save_armed: false,
             lang,
             hl: vec![],
             version: 1,
@@ -218,11 +240,48 @@ impl Editor {
         m
     }
 
+    /// Write the buffer to its file. If another program changed the file since it was read,
+    /// refuse once (the second save overwrites).
     pub fn save(&mut self) -> Result<(), String> {
+        if self.changed_on_disk() && !std::mem::replace(&mut self.save_armed, true) {
+            return Err("it changed on disk since it was opened: save again to overwrite".into());
+        }
         std::fs::write(&self.path, self.text()).map_err(|e| e.to_string())?;
+        self.disk = mtime(&self.path);
         self.saved = self.lines.clone();
         self.modified_at.set((self.version, false));
         self.close_armed = false;
+        self.save_armed = false;
+        Ok(())
+    }
+
+    /// The file on disk is not the one last read or written here.
+    pub fn changed_on_disk(&self) -> bool {
+        self.disk.is_some() && mtime(&self.path) != self.disk
+    }
+
+    /// Re-read the file (it changed on disk), keeping the cursor and scroll where they can stay.
+    /// Undo history is dropped: its steps describe the old text.
+    pub fn reload(&mut self) -> Result<(), String> {
+        let disk = mtime(&self.path);
+        let text = read_text(&self.path)?;
+        self.crlf = text.contains("\r\n");
+        self.lines = split_lines(&text);
+        self.saved = self.lines.clone();
+        self.base = self.lines.clone();
+        self.disk = disk;
+        self.undo.clear();
+        self.redo.clear();
+        self.last_edit = None;
+        self.anchor = None;
+        self.want_x = None;
+        self.cur = self.clamp(self.cur);
+        self.base_cur = self.cur;
+        self.clamp_top();
+        self.version += 1;
+        self.modified_at.set((self.version, false));
+        self.close_armed = false;
+        self.save_armed = false;
         Ok(())
     }
 
@@ -963,6 +1022,32 @@ mod tests {
         e.type_str(" ab");
         e.refresh_search();
         assert_eq!(e.search.as_ref().unwrap().matches.len(), 3);
+    }
+
+    #[test]
+    fn disk_changes_reload_and_guard_save() {
+        let dir = std::env::temp_dir().join(format!("pmux-editor-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("f.txt");
+        std::fs::write(&p, "one\ntwo").unwrap();
+        let mut e = Editor::open(&p).unwrap();
+        assert!(!e.changed_on_disk());
+        // Another program rewrites it (mtime moves forward).
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(&p, "agent\nwrote\nthis").unwrap();
+        assert!(e.changed_on_disk());
+        e.reload().unwrap();
+        assert_eq!(e.text(), "agent\nwrote\nthis");
+        assert!(!e.modified() && !e.changed_on_disk());
+        // Changed on disk while edited here: the first save refuses, the second overwrites.
+        e.type_str("x");
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(&p, "again").unwrap();
+        assert!(e.save().is_err());
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "again");
+        e.save().unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "xagent\nwrote\nthis");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -64,6 +64,35 @@ impl App {
         Ok(id)
     }
 
+    /// Watch the files open in editors (after one opens or closes).
+    pub(super) fn editors_rewatch(&self) {
+        let mut paths: Vec<std::path::PathBuf> = self.panes.values().filter_map(|p| Some(p.editor.as_ref()?.path.clone())).collect();
+        paths.sort();
+        paths.dedup();
+        self.disk_watcher.set(paths);
+    }
+
+    /// Files open in editors changed on disk: reload the buffers without unsaved edits; warn
+    /// about the others (saving them asks before overwriting).
+    pub(super) fn on_disk_change(&mut self, changed: &[std::path::PathBuf]) {
+        let mut reloaded = Vec::new();
+        let mut conflicts = Vec::new();
+        for p in self.panes.values_mut() {
+            let Some(e) = p.editor.as_mut().filter(|e| changed.contains(&e.path) && e.changed_on_disk()) else { continue };
+            if e.modified() {
+                conflicts.push(e.name());
+            } else if e.reload().is_ok() {
+                reloaded.push(p.id);
+            }
+        }
+        for id in reloaded {
+            self.highlight(id);
+        }
+        if !conflicts.is_empty() {
+            self.say(format!("{} changed on disk; this tab has unsaved edits", conflicts.join(", ")));
+        }
+    }
+
     /// The focused pane's editor, when the panes have the keyboard.
     fn focused_editor(&mut self) -> Option<&mut Editor> {
         let id = self.focused().filter(|_| self.focus == Focus::Panes)?;

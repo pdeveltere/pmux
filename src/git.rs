@@ -175,8 +175,13 @@ pub fn status(root: &Path) -> Status {
     let top = PathBuf::from(top.trim());
     let top = fs::canonicalize(&top).unwrap_or(top);
     let Ok(out) = run(root, &["--no-optional-locks", "status", "--porcelain=v1", "-z", "--ignored", "-unormal", "--", "."]) else { return st };
-    let mut recs = out.split('\0').filter(|r| r.len() > 3);
+    let mut recs = out.split('\0');
     while let Some(r) = recs.next() {
+        // "XY path"; a rename/copy is followed by its source path as a record of its own (which
+        // may be as short as one byte, so records can't be filtered by length up front).
+        if r.len() < 4 {
+            continue;
+        }
         let (x, y) = (r.as_bytes()[0], r.as_bytes()[1]);
         let rel = &r[3..];
         if x == b'R' || x == b'C' {

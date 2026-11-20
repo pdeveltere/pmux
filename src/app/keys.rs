@@ -2,7 +2,6 @@
 use super::{App, Focus, Panel, Prompt, PromptKind};
 use crate::{config, input, platform};
 use alacritty_terminal::term::TermMode;
-use std::path::Path;
 use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
@@ -188,18 +187,26 @@ impl App {
 
 /// Tab completion of a directory path: extend to the longest common prefix of matching folders.
 fn complete_dir(input: &str) -> String {
-    let full = config::expand(input);
-    let (dir, pre) = if input.ends_with('/') {
-        (full.clone(), String::new())
-    } else {
-        (full.parent().map(Path::to_path_buf).unwrap_or_default(), full.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
+    // Split the input itself at its last `/`: the name being completed is the text after it.
+    // (Splitting the expanded path instead breaks on `~`, `.` and `..`, whose expansions differ
+    // in length from what was typed.)
+    if input == "~" {
+        return "~/".into();
+    }
+    let (base, pre) = match input.rfind('/') {
+        Some(i) => (&input[..=i], &input[i + 1..]),
+        None => ("", input),
     };
+    if pre == "." || pre == ".." {
+        return format!("{input}/");
+    }
+    let dir = if base.is_empty() { std::path::PathBuf::from(".") } else { config::expand(base) };
     let Ok(rd) = std::fs::read_dir(&dir) else { return input.into() };
     let m: Vec<String> = rd
         .flatten()
         .filter(|e| e.path().is_dir())
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.starts_with(&pre) && (!n.starts_with('.') || pre.starts_with('.')))
+        .filter(|n| n.starts_with(pre) && (!n.starts_with('.') || pre.starts_with('.')))
         .collect();
     let Some(first) = m.first() else { return input.into() };
     let mut common = first.clone();
@@ -208,6 +215,22 @@ fn complete_dir(input: &str) -> String {
             common.pop();
         }
     }
-    let base = &input[..input.len() - pre.len()];
     format!("{base}{common}{}", if m.len() == 1 { "/" } else { "" })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::complete_dir;
+
+    #[test]
+    fn complete_dir_never_panics_on_short_or_special_input() {
+        assert_eq!(complete_dir("~"), "~/");
+        assert_eq!(complete_dir(".."), "../");
+        assert_eq!(complete_dir("~/."), "~/./");
+        let _ = complete_dir("");
+        let _ = complete_dir("/");
+        let _ = complete_dir("x/.");
+        let root = env!("CARGO_MANIFEST_DIR");
+        assert_eq!(complete_dir(&format!("{root}/sr")), format!("{root}/src/"));
+    }
 }

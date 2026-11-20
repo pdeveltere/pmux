@@ -52,6 +52,8 @@ pub enum Ev {
     Behind(Vec<PathBuf>, HashMap<PathBuf, u32>),
     /// An explorer folder changed on disk.
     Fs,
+    /// Files open in editors changed on disk.
+    Disk(Vec<PathBuf>),
     /// `git status` for an explorer root finished.
     FileStatus(PathBuf, git::Status),
     /// `git worktree remove` finished: (worktree, display name, result, API caller waiting for it).
@@ -164,6 +166,8 @@ pub struct App {
     /// Explorer row whose symlink arrow is hovered, and since when (its tooltip shows after `TOOLTIP_DELAY`).
     pub link_hover: Option<(usize, Instant)>,
     files_watcher: watch::Watcher,
+    /// Files open in editors, so an edit by another program (an agent) shows.
+    disk_watcher: watch::Watcher,
     /// One `git status` at a time; `status_again` re-runs it when changes arrived meanwhile.
     status_busy: bool,
     status_again: bool,
@@ -251,6 +255,7 @@ impl App {
             meta_last: HashMap::new(),
             watcher: watch::Watcher::new(tx.clone(), Ev::Git),
             files_watcher: watch::Watcher::new(tx.clone(), |_| Ev::Fs),
+            disk_watcher: watch::Watcher::new(tx.clone(), Ev::Disk),
             tx,
             behind: HashMap::new(),
             files: HashMap::new(),
@@ -312,6 +317,7 @@ impl App {
                 }
                 self.refresh_status();
             }
+            Ev::Disk(changed) => self.on_disk_change(&changed),
             Ev::FileStatus(root, st) => {
                 self.status_busy = false;
                 if let Some(e) = self.files.get_mut(&root) {

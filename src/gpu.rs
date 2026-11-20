@@ -257,18 +257,21 @@ impl Gpu {
         );
     }
 
-    pub fn render(&mut self, insts: &[Inst], clear: [f32; 3]) {
+    /// Draw a frame. False when the surface was outdated or lost: it's reconfigured, and the
+    /// caller should draw again.
+    pub fn render(&mut self, insts: &[Inst], clear: [f32; 3]) -> bool {
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
             Err(_) => {
                 self.surface.configure(&self.device, &self.config);
-                return;
+                return false;
             }
         };
         let view = frame.texture.create_view(&Default::default());
         let enc = self.encode(&view, insts, clear);
         self.queue.submit([enc.finish()]);
         frame.present();
+        true
     }
 
     /// Render offscreen and read back as top-down BGRA/RGBA rows (debug: `pmux snapshot`).

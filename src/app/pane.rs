@@ -237,6 +237,7 @@ impl App {
         self.insert_pane(pane, view, true);
         self.apply_layout();
         self.highlight(id);
+        self.editors_rewatch();
         Ok(id)
     }
 
@@ -328,6 +329,9 @@ impl App {
         if let Some(p) = self.panes.remove(&id) {
             if let Some(v) = self.views.get_mut(&p.view) {
                 v.remove(id);
+            }
+            if p.editor.is_some() {
+                self.editors_rewatch();
             }
             self.see_focused();
         }
