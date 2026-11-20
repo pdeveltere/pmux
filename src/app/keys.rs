@@ -18,6 +18,9 @@ impl App {
         if self.has_focused_editor() {
             return self.editor_paste(s);
         }
+        if let Some(id) = self.focused_search() {
+            return self.search_paste(id, s);
+        }
         let Some(id) = self.focused().filter(|_| self.focus == Focus::Panes) else { return };
         let bp = self.panes[&id].vt.mode().contains(TermMode::BRACKETED_PASTE);
         let s = s.replace("\r\n", "\r").replace('\n', "\r");
@@ -40,7 +43,7 @@ impl App {
         }
         // App shortcuts on Cmd (Super).
         if m.super_key() {
-            if self.prompt.is_none() && self.editor_cmd_key(k, ch) {
+            if self.prompt.is_none() && (self.editor_cmd_key(k, ch) || self.search_cmd_key(k)) {
                 return;
             }
             return self.cmd_key(k, ch);
@@ -70,6 +73,9 @@ impl App {
         if self.panes[&id].editor.is_some() {
             return self.editor_key(k);
         }
+        if self.panes[&id].search.is_some() {
+            return self.search_tab_key(id, k);
+        }
         let ac = self.panes[&id].vt.mode().contains(TermMode::APP_CURSOR);
         let bytes = input::encode(k, m, ac);
         if !bytes.is_empty() {
@@ -81,6 +87,7 @@ impl App {
         match (input::named(k), ch.map(|c| c.to_ascii_lowercase())) {
             (_, Some('k')) => self.clear_focused(),
             (_, Some('p')) => self.open_finder(),
+            (_, Some('f')) if self.mods.shift_key() => self.open_project_search(),
             (_, Some('v')) => {
                 if let Some(s) = platform::clipboard_get() {
                     self.on_paste(&s);

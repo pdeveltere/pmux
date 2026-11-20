@@ -16,6 +16,7 @@ mod input;
 mod macmenu;
 mod platform;
 mod pty;
+mod search;
 mod settings;
 mod syntax;
 mod term;

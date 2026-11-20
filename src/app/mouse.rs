@@ -184,6 +184,12 @@ impl App {
             }
             return;
         }
+        if self.panes[&pr.id].search.is_some() {
+            if b == MouseButton::Left {
+                self.search_press(pr.id, x, y);
+            }
+            return;
+        }
         if pr.body.contains(x, y) && self.panes[&pr.id].vt.mode().intersects(TermMode::MOUSE_MODE) {
             self.mouse_pane = Some((pr.id, b));
             self.pane_mouse(pr.id, MouseKind::Down(b), x, y);
@@ -258,6 +264,9 @@ impl App {
         let Some(pr) = self.pane_body_at(x, y) else { return };
         if self.panes[&pr.id].editor.is_some() {
             return self.editor_wheel(pr.id, n);
+        }
+        if self.panes[&pr.id].search.is_some() {
+            return self.search_wheel(pr.id, n);
         }
         let mode = self.panes[&pr.id].vt.mode();
         if mode.intersects(TermMode::MOUSE_MODE) {

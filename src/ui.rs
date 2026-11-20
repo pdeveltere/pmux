@@ -644,6 +644,10 @@ fn panes(app: &App, p: &mut Painter) {
             editor(app, p, ed, pr.body, is_focus);
             continue;
         }
+        if let Some(s) = &pane.search {
+            project_search(app, p, s, pr.body, is_focus);
+            continue;
+        }
         // Scrolled back: small badge in the top-right corner.
         let off = pane.vt.display_offset();
         if off > 0 {
@@ -879,6 +883,140 @@ fn search_bar(app: &App, p: &mut Painter, ed: &crate::editor::Editor, s: &crate:
     p.text(&count, R { x: aa.x + aa.w + app.px(10.0), w: (bar.x + bar.w - aa.x - aa.w - app.px(18.0)).max(0.0), ..field }, 12.0, MUTED, false);
 }
 
+/// A project search tab (⌘⇧F): query bar with Zed's toggles, then each file's matching lines.
+fn project_search(app: &App, p: &mut Painter, s: &crate::search::ProjectSearch, body: R, focus: bool) {
+    use crate::search::Row;
+    let g = app.search_geom(body);
+    let line = app.hairline();
+    let bar = g.bar;
+    p.rect(bar, SIDEBAR);
+    p.rect(R { y: bar.y + bar.h - line, h: line, ..bar }, BORDER);
+    let field = g.field;
+    p.rect(field, BG);
+    p.outline(field, line, if s.error.is_some() { DANGER } else if focus { ACCENT } else { BORDER });
+    let tx = field.x + app.px(8.0);
+    let tr = R { x: tx, w: field.w - app.px(16.0), ..field };
+    let w = if s.query.text.is_empty() { p.text("Search all files…", tr, 13.0, FAINT, false).min(0.0) } else { p.text(&s.query.text, tr, 13.0, TEXT, false) };
+    if focus {
+        p.rect(R { x: (tx + w).min(field.x + field.w - app.px(6.0)), y: field.y + app.px(5.0), w: app.px(1.5), h: field.h - app.px(10.0) }, TEXT);
+    }
+    for (t, (label, on)) in g.toggles.iter().zip([("Aa", s.query.case), ("ab", s.query.word), (".*", s.query.regex)]) {
+        if on {
+            p.rect(*t, SELECT);
+        }
+        p.text_centered(label, *t, 12.0, if on { TEXT } else { MUTED });
+        if label == "ab" {
+            // Whole word: a bar under the letters.
+            p.rect(R { x: t.x + app.px(8.0), y: t.y + t.h - app.px(6.0), w: t.w - app.px(16.0), h: line.max(1.0) }, if on { TEXT } else { MUTED });
+        }
+    }
+    let last = g.toggles[2];
+    let info = if let Some(e) = &s.error {
+        e.clone()
+    } else if s.running.is_some() {
+        "Searching…".into()
+    } else if let (Some(f), Some(_)) = (&s.found, &s.searched) {
+        let (n, files) = (s.hits, f.files.len());
+        if n == 0 {
+            "No results".into()
+        } else {
+            format!("{n}{} result{} in {files} file{}", if f.truncated { "+" } else { "" }, if n == 1 { "" } else { "s" }, if files == 1 { "" } else { "s" })
+        }
+    } else if s.searched.as_ref() != Some(&s.query) && !s.query.text.is_empty() {
+        "Enter to search".into()
+    } else {
+        String::new()
+    };
+    let ix = last.x + last.w + app.px(10.0);
+    p.text(&info, R { x: ix, w: (bar.x + bar.w - ix - app.px(8.0)).max(0.0), ..field }, 12.0, if s.error.is_some() { DANGER } else { MUTED }, false);
+
+    let Some(found) = &s.found else { return };
+    let (cw, ch) = (app.cell_w, app.cell_h);
+    let base = p.fonts.baseline;
+    let mut glyphs = std::mem::take(p.cells);
+    glyphs.clear();
+    let pad = app.px(10.0);
+    let gutter = 6.0 * cw;
+    for (k, row) in s.rows.iter().enumerate().skip(s.top).take(g.rows() + 1) {
+        let y = g.list.y + (k - s.top) as f32 * g.row_h;
+        if y >= g.list.y + g.list.h {
+            break;
+        }
+        let r = R { x: g.list.x, y, w: g.list.w, h: g.row_h };
+        match *row {
+            Row::File(i) => {
+                let fh = &found.files[i];
+                let (dir, name) = fh.path.rsplit_once('/').unwrap_or(("", &fh.path));
+                let ic = app.px(16.0);
+                if k > 0 {
+                    p.rect(R { y: r.y, h: line, ..r }, BORDER);
+                }
+                p.icon(icons::files::for_name(name), R { x: r.x + pad, w: ic, ..r }, MUTED);
+                let x = r.x + pad + ic + app.px(8.0);
+                let cnt = fh.hits.len().to_string();
+                let right = r.x + r.w - pad;
+                let cl = p.text_right(&cnt, right, r, 11.0, FAINT, false);
+                let nw = p.text(name, R { x, w: (cl - x - app.px(8.0)).max(0.0), ..r }, 13.0, TEXT, true);
+                let dx = x + nw + app.px(8.0);
+                if !dir.is_empty() && dx < cl - app.px(8.0) {
+                    p.text(dir, R { x: dx, w: cl - app.px(8.0) - dx, ..r }, 12.0, MUTED, false);
+                }
+            }
+            Row::Hit(i, j) => {
+                let h = &found.files[i].hits[j];
+                let sel = k == s.sel;
+                if sel {
+                    p.rect(r, if focus { SELECT } else { HOVER });
+                }
+                let ty = y + ((g.row_h - ch) / 2.0).round();
+                let num = (h.line + 1).to_string();
+                let nx = r.x + pad + gutter - (num.len() as f32 + 1.0) * cw;
+                for (n, c) in num.chars().enumerate() {
+                    glyphs.push((c, 0, nx + n as f32 * cw, ty + base, if sel { MUTED } else { FAINT }));
+                }
+                let tx0 = r.x + pad + gutter + cw;
+                let cols = ((r.x + r.w - pad - tx0) / cw).floor().max(0.0) as usize;
+                // Leading indentation dropped, so lines from deep inside blocks still read.
+                let skip = h.text.chars().take_while(|c| c.is_whitespace()).count();
+                let mut x = 0usize;
+                let mut xs = Vec::with_capacity(h.text.len());
+                for (n, c) in h.text.chars().enumerate() {
+                    xs.push(x);
+                    if n < skip {
+                        continue;
+                    }
+                    let w = if c == '\t' { crate::editor::TAB - x % crate::editor::TAB } else { 1 };
+                    if x + w > cols {
+                        break;
+                    }
+                    if c != ' ' && c != '\t' {
+                        let hit = h.ranges.iter().any(|&(a, b)| n >= a && n < b);
+                        glyphs.push((c, 0, tx0 + x as f32 * cw, ty + base, if hit { TEXT } else { MUTED }));
+                    }
+                    x += w;
+                }
+                xs.push(x);
+                for &(a, b) in &h.ranges {
+                    let (x0, x1) = (xs.get(a.max(skip)).copied().unwrap_or(x), xs.get(b).copied().unwrap_or(x).min(cols));
+                    if x1 > x0 {
+                        p.rect(R { x: tx0 + x0 as f32 * cw, y: ty, w: (x1 - x0) as f32 * cw, h: ch }, MATCH);
+                    }
+                }
+            }
+        }
+    }
+    for &(c, style, x, y, fg) in &glyphs {
+        if let Some((gl, gx, gy)) = p.fonts.cell(c, style) {
+            p.glyph(gl, x + gx as f32, y + gy as f32, fg);
+        }
+    }
+    *p.cells = glyphs;
+    if s.rows.is_empty() && s.searched.is_some() && s.running.is_none() {
+        let r = R { y: g.list.y + app.px(20.0), h: app.px(20.0), ..g.list };
+        p.text_centered("No results", r, 13.0, MUTED);
+    }
+}
+
 /// Draw `s` from `r.x` with the chars at `hits` (char indices, offset by `from`) in ACCENT.
 /// Returns the width drawn.
 fn highlighted(p: &mut Painter, s: &str, from: usize, hits: &[usize], r: R, pt: f32, color: C) -> f32 {
@@ -1028,10 +1166,13 @@ fn status(app: &App, p: &mut Painter) {
         let finding = fed.and_then(|e| e.search.as_ref()).is_some_and(|s| s.focused);
         match app.focus {
             Focus::Panes if finding => "Enter next · ⇧Enter previous · ⌘G/⌘⇧G next/previous · ⌥⌘C match case · Esc close",
+            Focus::Panes if app.focused().and_then(|id| app.panes.get(&id)).is_some_and(|p| p.search.is_some()) => {
+                "Enter search / open · ↑↓ select · ⌥⌘C case · ⌥⌘W word · ⌥⌘X regex · ⌘W close"
+            }
             Focus::Panes if editing => "⌘F find · ⌘S save · ⌘Z undo · ⌘⇧Z redo · ⌘X/C line or selection · ⌘[ ] indent · ⌘W close · ⌘T terminal tab",
             Focus::Files => "Enter open · ←→ fold · right-click for actions · Esc back · ⌘⇧E hide",
             Focus::Sidebar => "Enter open · right-click for actions · a add project · w worktree · W workspace · x delete",
-            Focus::Panes => "⌘P go to file · ⌘T tab · ⌘⇧[ ] tabs · ⌘D split · ⌘[ ] focus · ⌘K clear · ⌘E sidebar · ⌘B ⌘⇧A ⌘⇧E panels · ⌘↑↓ worktree · C-a prefix",
+            Focus::Panes => "⌘P go to file · ⌘⇧F find in project · ⌘T tab · ⌘⇧[ ] tabs · ⌘D split · ⌘[ ] focus · ⌘K clear · ⌘E sidebar · ⌘B ⌘⇧A ⌘⇧E panels · ⌘↑↓ worktree · C-a prefix",
         }
     };
     let (mut fx, mut rx) = (x, r.w - x);

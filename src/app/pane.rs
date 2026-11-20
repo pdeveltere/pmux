@@ -51,6 +51,8 @@ pub struct Pane {
     link: Option<Link>,
     /// Set for an editor pane (then `vt` is an idle placeholder).
     pub editor: Option<Editor>,
+    /// Set for a project search pane (⌘⇧F; then `vt` is an idle placeholder).
+    pub search: Option<crate::search::ProjectSearch>,
     pub view: std::path::PathBuf,
     /// Set with `pmux title`.
     pub title: Option<String>,
@@ -125,6 +127,9 @@ impl Pane {
         if let Some(e) = &self.editor {
             return e.name();
         }
+        if let Some(s) = &self.search {
+            return s.title();
+        }
         self.title.clone().or_else(|| self.osc_title.clone()).or(self.agent.map(String::from)).unwrap_or_else(|| "shell".into())
     }
 
@@ -132,6 +137,9 @@ impl Pane {
     pub fn kind(&self) -> &'static str {
         if self.editor.is_some() {
             return "editor";
+        }
+        if self.search.is_some() {
+            return "search";
         }
         self.agent.unwrap_or("shell")
     }
@@ -264,6 +272,7 @@ impl Pane {
             vt,
             link,
             editor,
+            search: None,
             view: view.to_path_buf(),
             title: None,
             osc_title: None,
@@ -314,6 +323,9 @@ impl App {
             }
             return self.on_exit(id);
         }
+        if p.search.is_some() {
+            return self.on_exit(id);
+        }
         if let Some(l) = &p.link {
             l.kill(id);
         }
@@ -332,6 +344,9 @@ impl App {
             }
             if p.editor.is_some() {
                 self.editors_rewatch();
+            }
+            if let Some((_, c)) = p.search.as_ref().and_then(|s| s.running.as_ref()) {
+                c.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             self.see_focused();
         }

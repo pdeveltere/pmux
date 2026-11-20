@@ -104,7 +104,7 @@ impl App {
     }
 
     /// Scroll the focused editor so its cursor shows.
-    fn reveal_cursor(&mut self) {
+    pub(super) fn reveal_cursor(&mut self) {
         let Some(id) = self.focused() else { return };
         let Some(pr) = self.layout().into_iter().find(|p| p.id == id) else { return };
         let Some(ed) = self.panes.get(&id).and_then(|p| p.editor.as_ref()) else { return };
@@ -219,7 +219,7 @@ impl App {
         let mut saved_settings = false;
         match (input::named(k), input::base_char(k, ModifiersState::empty()), ch.map(|c| c.to_ascii_lowercase())) {
             // Find bar: ⌘F open/focus, ⌘G / ⌘⇧G next/previous, ⌥⌘C match case.
-            (_, Some('f'), _) => e.open_search(),
+            (_, Some('f'), _) if !shift => e.open_search(),
             (_, Some('g'), _) if e.search.is_some() => e.find_step(!shift),
             (_, Some('g'), _) => e.open_search(),
             (_, Some('c'), _) if alt && e.search.is_some() => e.toggle_case(),

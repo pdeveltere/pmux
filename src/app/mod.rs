@@ -2,7 +2,7 @@
 //!
 //! `App` is one struct; its behaviour is split by concern across the submodules, each adding an
 //! `impl App` block: `layout` (geometry), `pane` (terminals), `sidebar`, `agents` (agents panel), `explorer` (file panel),
-//! `edit` (editor panes), `find` (go to file), `navigate` (tabs/focus), `keys`, `mouse`, `menu`, `commands` (socket API).
+//! `edit` (editor panes), `find` (go to file), `psearch` (find in project), `navigate` (tabs/focus), `keys`, `mouse`, `menu`, `commands` (socket API).
 mod adopt;
 mod agents;
 mod commands;
@@ -17,6 +17,7 @@ mod model;
 mod mouse;
 mod navigate;
 mod pane;
+mod psearch;
 mod restore;
 mod sidebar;
 
@@ -66,6 +67,8 @@ pub enum Ev {
     WorktreeAdded(Result<PathBuf, String>),
     /// A background highlight of editor pane `.0` at text version `.1` finished.
     Highlighted(u32, u64, Vec<Vec<crate::syntax::Span>>),
+    /// A project search of pane `.0` (generation `.1`) for this query finished.
+    Searched(u32, u64, crate::search::Query, crate::search::Found),
     /// pmux → Settings… in the menu bar.
     OpenSettings,
 }
@@ -359,6 +362,7 @@ impl App {
                 }
                 self.highlight(id); // edits that came in meanwhile
             }
+            Ev::Searched(id, gen, q, f) => self.search_done(id, gen, q, f),
             Ev::OpenSettings => self.open_file(&crate::settings::ensure()),
         }
     }
