@@ -128,10 +128,21 @@ impl App {
         if self.finder.is_some() {
             return self.finder_click(b, x, y);
         }
-        // A click away from the status-bar prompt cancels it, like Esc, so it can't leave the
-        // rest of the window unresponsive.
-        if self.prompt.is_some() && !self.status_rect().contains(x, y) {
-            self.prompt = None;
+        // A click away from the prompt (the status bar, or the sidebar row being typed in) cancels
+        // it, like Esc, so it can't leave the rest of the window unresponsive.
+        if let Some(inline) = self.prompt.as_ref().map(|p| p.inline) {
+            let on_it = if inline {
+                self.sidebar_rect().contains(x, y) && self.sidebar_row_at(y).is_some_and(|i| matches!(self.rows()[i], Row::New(..)))
+            } else {
+                self.status_rect().contains(x, y)
+            };
+            if on_it && inline {
+                return;
+            }
+            if !on_it {
+                let p = self.prompt.take().expect("prompt is open");
+                self.end_inline(&p);
+            }
         }
         let free = self.prompt.is_none();
         if let Some(panel) = self.panel_button_at(x, y) {

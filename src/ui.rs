@@ -1,5 +1,5 @@
 //! Build one frame's draw list: sidebar, tabs, terminal grids, file explorer, status bar, menu.
-use crate::app::{ago, is_default_branch, proj_key, subtree_end, ws_key, Action, AgentRow, App, Focus, Group, Pane, Panel, Row, State, TabHit, Tree, TreeRow, R};
+use crate::app::{ago, is_default_branch, proj_key, subtree_end, ws_key, Action, AgentRow, App, Focus, Group, Pane, Panel, PromptKind, Row, State, TabHit, Tree, TreeRow, R};
 use crate::git::FileState;
 use crate::gpu::{Inst, COLOR, MASK, RECT};
 use crate::icons::{self, Icon};
@@ -407,6 +407,17 @@ fn sidebar(app: &App, p: &mut Painter) {
                 behind_of = Some(&w.path);
                 let dim = panes.is_empty() || app.removing.contains(&w.path);
                 (w.branch.clone(), &icons::BRANCH, if dim { MUTED } else { TEXT }, false, panes)
+            }
+            // The name of a new project / worktree being typed: an edit field over the row, like a
+            // new folder in Zed's project panel.
+            Row::New(..) => {
+                let pr = app.prompt.as_ref().expect("a new row has its prompt");
+                let icon = if matches!(pr.kind, PromptKind::NewWorktree(_)) { &icons::BRANCH } else { &icons::FOLDER };
+                p.rect(t.bg, ACCENT);
+                p.rect(t.bg.inset(app.hairline()), SIDEBAR);
+                let cx = (t.text_x + p.measure(&pr.input, 13.0, false) + app.px(1.0)).min(t.right - app.px(2.0));
+                p.rect(R { x: cx, y: t.bg.y + app.px(4.0), w: app.px(1.5), h: t.bg.h - app.px(8.0) }, TEXT);
+                return RowLook { icon, icon_color: MUTED, label: pr.input.clone(), label_color: TEXT, bold: false, label_end: t.right - app.px(4.0) };
             }
         };
         let r = t.bg;
@@ -1173,7 +1184,7 @@ fn status(app: &App, p: &mut Painter) {
     p.rect(r, SIDEBAR);
     p.rect(R { h: app.hairline(), ..r }, BORDER);
     let x = app.px(14.0);
-    if let Some(pr) = &app.prompt {
+    if let Some(pr) = app.prompt.as_ref().filter(|p| !p.inline) {
         let lw = p.text(&format!("{}:", pr.label), R { x, ..r }, 12.0, ACCENT, true);
         let ix = x + lw + app.px(8.0);
         let iw = p.text(&pr.input, R { x: ix, ..r }, 12.0, TEXT, false);
@@ -1182,7 +1193,10 @@ fn status(app: &App, p: &mut Painter) {
         return;
     }
     // Shortcut hints only when asked for (settings.toml); the prefix mode always says it's on.
-    let right = if !app.settings.shortcut_hints {
+    let inline = app.prompt.as_ref().filter(|p| p.inline);
+    let right = if let Some(pr) = inline {
+        if matches!(pr.kind, PromptKind::AddProject(_)) { "Enter create · Esc cancel · Tab complete" } else { "Enter create · Esc cancel" }
+    } else if !app.settings.shortcut_hints {
         if app.prefix { "C-a" } else { "" }
     } else if app.finder.is_some() {
         "↑↓ select · Enter open · Esc close"

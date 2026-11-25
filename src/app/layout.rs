@@ -168,7 +168,7 @@ impl App {
 
     /// The status bar's panel toggles, each on its panel's side as in Zed (none while a prompt has the bar).
     pub fn panel_buttons(&self) -> Vec<(super::Panel, R)> {
-        if self.prompt.is_some() {
+        if self.prompt.as_ref().is_some_and(|p| !p.inline) {
             return Vec::new();
         }
         let r = self.status_rect();

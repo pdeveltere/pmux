@@ -45,6 +45,7 @@ impl App {
                 }
                 v
             }
+            Some(Row::New(..)) => return,
             None => vec![item("New workspace…", Action::NewWorkspace), item("Add project…", Action::AddProject(None))],
         };
         if let Some(i) = row {
