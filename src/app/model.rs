@@ -66,7 +66,7 @@ pub enum Row {
     Ws(usize),
     Proj(usize, usize),
     Wt(usize, usize, usize),
-    /// The name being typed for a new project (level 1) or worktree (level 2), as the last
+    /// The name being typed for a new project (level 1) or worktree (level 2), as the first
     /// child of its parent: (workspace, level).
     New(usize, usize),
 }

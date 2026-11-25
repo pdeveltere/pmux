@@ -10,24 +10,24 @@ impl App {
     /// The visible sidebar rows, top to bottom.
     pub fn rows(&self) -> Vec<Row> {
         let mut out = Vec::new();
-        // The row being typed in, if any: last under the parent it adds to.
+        // The row being typed in, if any: first under the parent it adds to.
         let inline = self.prompt.as_ref().filter(|p| p.inline).map(|p| &p.kind);
         for (wi, ws) in self.workspaces.iter().enumerate() {
             out.push(Row::Ws(wi));
             if self.folded.contains(&ws_key(&ws.name)) {
                 continue;
             }
+            if matches!(inline, Some(PromptKind::AddProject(name)) if *name == ws.name) {
+                out.push(Row::New(wi, 1));
+            }
             for (pi, p) in ws.projects.iter().enumerate() {
                 out.push(Row::Proj(wi, pi));
-                if !self.folded.contains(&proj_key(&p.path)) {
-                    out.extend(p.listed().map(|(ti, _)| Row::Wt(wi, pi, ti)));
-                }
                 if matches!(inline, Some(PromptKind::NewWorktree(path)) if *path == p.path) {
                     out.push(Row::New(wi, 2));
                 }
-            }
-            if matches!(inline, Some(PromptKind::AddProject(name)) if *name == ws.name) {
-                out.push(Row::New(wi, 1));
+                if !self.folded.contains(&proj_key(&p.path)) {
+                    out.extend(p.listed().map(|(ti, _)| Row::Wt(wi, pi, ti)));
+                }
             }
         }
         out
