@@ -22,7 +22,7 @@ impl App {
             }
             Some(Row::Proj(w, p)) => {
                 let pr = self.project(w, p);
-                let mut v = vec![item("Open", Action::Open(pr.path.clone()))];
+                let mut v = Vec::new();
                 if pr.worktrees.is_some() {
                     v.push(item("New worktree…", Action::NewWorktree(pr.path.clone())));
                 }
