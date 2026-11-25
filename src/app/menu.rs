@@ -11,13 +11,12 @@ impl App {
         let fold = |app: &Self, key: String| item(if app.folded.contains(&key) { "Expand" } else { "Collapse" }, Action::Toggle(key));
         let items: Vec<MenuItem> = match row.and_then(|i| rows.get(i).copied()) {
             Some(Row::Ws(w)) => {
-                let name = self.workspaces[w].name.clone();
-                vec![
-                    item("New project…", Action::AddProject(Some(name.clone()))),
-                    fold(self, ws_key(&name)),
-                    sep(),
-                    item("Close", Action::Delete(Close::Workspace(name))),
-                ]
+                let ws = &self.workspaces[w];
+                let name = ws.name.clone();
+                let mut v = vec![item("New project…", Action::AddProject(Some(name.clone()))), fold(self, ws_key(&name))];
+                v.extend(path_items(&ws.path));
+                v.extend([sep(), item("Close", Action::Delete(Close::Workspace(name)))]);
+                v
             }
             Some(Row::Proj(w, p)) => {
                 let pr = self.project(w, p);
