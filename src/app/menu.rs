@@ -14,7 +14,6 @@ impl App {
                 let name = self.workspaces[w].name.clone();
                 vec![
                     item("New project…", Action::AddProject(Some(name.clone()))),
-                    item("Rename…", Action::RenameWorkspace(name.clone())),
                     fold(self, ws_key(&name)),
                     sep(),
                     item("Close", Action::Delete(Close::Workspace(name))),
@@ -31,7 +30,7 @@ impl App {
                 }
                 // No separator on top when nothing comes before the path items.
                 v.extend(path_items(&pr.path).into_iter().skip(v.is_empty() as usize));
-                v.extend([sep(), item("Close project", Action::Delete(Close::Project(pr.path.clone())))]);
+                v.extend([sep(), item("Close", Action::Delete(Close::Project(pr.path.clone())))]);
                 v
             }
             Some(Row::Wt(w, p, t)) => {
@@ -100,7 +99,6 @@ impl App {
                 None => self.say(format!("workspace {name} no longer exists")),
             },
             Action::NewWorkspace => self.prompt_new_workspace(),
-            Action::RenameWorkspace(name) => self.prompt_rename_workspace(name),
             Action::Toggle(key) => self.toggle_fold(key),
             Action::NewWorktree(p) => self.prompt_new_worktree(p),
             Action::Open(v) => self.open_view(v),
