@@ -1,5 +1,5 @@
 //! Right-click context menus and the actions their items run.
-use super::{item, proj_key, sep, ws_key, Action, App, Close, Menu, MenuItem, Row};
+use super::{item, sep, ws_key, Action, App, Close, Menu, MenuItem, Row};
 use crate::{config, platform};
 use winit::event::KeyEvent;
 use winit::keyboard::NamedKey;
@@ -11,31 +11,21 @@ impl App {
         let fold = |app: &Self, key: String| item(if app.folded.contains(&key) { "Expand" } else { "Collapse" }, Action::Toggle(key));
         let items: Vec<MenuItem> = match row.and_then(|i| rows.get(i).copied()) {
             Some(Row::Ws(w)) => {
-                let name = self.workspaces[w].name.clone();
-                vec![
-                    item("New project…", Action::AddProject(Some(name.clone()))),
-                    item("Rename…", Action::RenameWorkspace(name.clone())),
-                    fold(self, ws_key(&name)),
-                    sep(),
-                    item("Delete workspace", Action::Delete(Close::Workspace(name))),
-                ]
-            }
-            Some(Row::Proj(w, p)) => {
-                let pr = self.project(w, p);
+                let ws = &self.workspaces[w];
                 let mut v = Vec::new();
-                if pr.worktrees.is_some() {
-                    v.push(item("New worktree…", Action::NewWorktree(pr.path.clone())));
+                if ws.worktrees.is_some() {
+                    v.push(item("New worktree…", Action::NewWorktree(ws.path.clone())));
                 }
-                if pr.has_linked() {
-                    v.push(fold(self, proj_key(&pr.path)));
+                if ws.has_linked() {
+                    v.push(fold(self, ws_key(&ws.path)));
                 }
                 // No separator on top when nothing comes before the path items.
-                v.extend(path_items(&pr.path).into_iter().skip(v.is_empty() as usize));
-                v.extend([sep(), item("Close project", Action::Delete(Close::Project(pr.path.clone())))]);
+                v.extend(path_items(&ws.path).into_iter().skip(v.is_empty() as usize));
+                v.extend([sep(), item("Close workspace", Action::Delete(Close::Workspace(ws.path.clone())))]);
                 v
             }
-            Some(Row::Wt(w, p, t)) => {
-                let pr = self.project(w, p);
+            Some(Row::Wt(w, t)) => {
+                let pr = &self.workspaces[w];
                 let wt = &pr.worktrees.as_ref().expect("row has worktrees")[t];
                 let mut v = vec![item("Open", Action::Open(wt.path.clone()))];
                 v.extend(path_items(&wt.path));
@@ -45,7 +35,7 @@ impl App {
                 }
                 v
             }
-            None => vec![item("New workspace…", Action::NewWorkspace), item("Add project…", Action::AddProject(None))],
+            None => vec![item("Add workspace…", Action::AddWorkspace)],
         };
         if let Some(i) = row {
             self.sel = i;
@@ -94,13 +84,7 @@ impl App {
     pub(super) fn run_action(&mut self, a: Action) {
         self.dirty = true;
         match a {
-            Action::AddProject(None) => self.prompt_add_project(None),
-            Action::AddProject(Some(name)) => match self.ws_index(&name) {
-                Some(w) => self.prompt_add_project(Some(w)),
-                None => self.say(format!("workspace {name} no longer exists")),
-            },
-            Action::NewWorkspace => self.prompt_new_workspace(),
-            Action::RenameWorkspace(name) => self.prompt_rename_workspace(name),
+            Action::AddWorkspace => self.prompt_add_workspace(),
             Action::Toggle(key) => self.toggle_fold(key),
             Action::NewWorktree(p) => self.prompt_new_worktree(p),
             Action::Open(v) => self.open_view(v),

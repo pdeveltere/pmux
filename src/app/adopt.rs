@@ -1,4 +1,4 @@
-//! `pmux import herdr` in the window: projects for the terminals' folders, then one tab per
+//! `pmux import herdr` in the window: workspaces for the terminals' folders, then one tab per
 //! Herdr tab with a shell per terminal (and its command typed in).
 use super::{App, Ev};
 use crate::api::Reply;
@@ -7,13 +7,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 
-/// Workspace that projects new to pmux land in.
-const IMPORT_WS: &str = "herdr";
-
 impl App {
-    /// The deepest project or worktree folder containing `dir`.
+    /// The deepest workspace or worktree folder containing `dir`.
     fn view_for(&self, dir: &Path) -> Option<PathBuf> {
-        self.projects().flat_map(|p| p.view_paths()).filter(|v| dir.starts_with(v)).max_by_key(|v| v.as_os_str().len())
+        self.workspaces.iter().flat_map(|p| p.view_paths()).filter(|v| dir.starts_with(v)).max_by_key(|v| v.as_os_str().len())
     }
 
     /// The repo `dir` belongs to (its main checkout, for a linked worktree), else `dir` itself.
@@ -54,24 +51,15 @@ impl App {
 
     /// Open an import's terminals; `repos` maps each existing folder to its repo.
     pub(super) fn api_import(&mut self, plan: Plan, repos: &HashMap<PathBuf, PathBuf>) -> Reply {
-        // Projects first, so every folder has a view.
+        // Workspaces first, so every folder has a view.
         let mut added = Vec::new();
         for it in &plan.items {
             let cwd = std::fs::canonicalize(&it.cwd).unwrap_or_else(|_| it.cwd.clone());
             if self.view_for(&cwd).is_some() || !cwd.is_dir() {
                 continue;
             }
-            let w = match self.workspaces.iter().position(|w| w.name == IMPORT_WS) {
-                Some(w) => w,
-                None => {
-                    if let Err(e) = self.add_workspace(IMPORT_WS) {
-                        return Reply::err(e);
-                    }
-                    self.workspaces.len() - 1
-                }
-            };
             let repo = repos.get(&cwd).cloned().unwrap_or_else(|| cwd.clone());
-            if let Ok(name) = self.add_project(w, &repo.display().to_string()) {
+            if let Ok(name) = self.add_workspace(&repo.display().to_string()) {
                 added.push(name);
             }
         }
@@ -107,7 +95,7 @@ impl App {
         }
         let mut s = format!("opened {opened} terminals in {tabs} tabs");
         if !added.is_empty() {
-            s += &format!("; added to workspace {IMPORT_WS}: {}", added.join(", "));
+            s += &format!("; added workspaces: {}", added.join(", "));
         }
         if !plan.run {
             s += "\ncommands are typed at each prompt: press Enter in a tab to start it (or import with --run)";
