@@ -213,7 +213,7 @@ impl App {
     pub fn new(tx: Tx, socket: PathBuf) -> Self {
         let default = || {
             let cwd = std::env::current_dir().unwrap_or_default();
-            config::Config { workspace: vec![config::WsCfg { name: "default".into(), path: None, projects: vec![cwd.display().to_string()] }] }
+            config::Config { workspace: vec![config::WsCfg { path: None, projects: vec![cwd.display().to_string()] }] }
         };
         // A config we can't parse is left alone (not overwritten) until the user fixes it.
         let (cfg, config_error) = match config::load() {
@@ -228,15 +228,13 @@ impl App {
                 (default(), Some(e))
             }
         };
-        let workspaces = cfg
-            .workspace
-            .into_iter()
-            .map(|w| {
-                let path = w.folder();
-                let path = std::fs::canonicalize(&path).unwrap_or(path);
-                Workspace { name: w.name, path, projects: w.projects.iter().filter_map(|p| Project::open(&config::expand(p))).collect() }
-            })
-            .collect();
+        let mut workspaces: Vec<Workspace> = Vec::new();
+        for w in cfg.workspace {
+            let path = w.folder();
+            let path = std::fs::canonicalize(&path).unwrap_or(path);
+            let projects = w.projects.iter().filter_map(|p| Project::open(&config::expand(p))).collect();
+            workspaces.push(Workspace::new(path, projects, &workspaces));
+        }
         let flash = config_error.as_ref().map(|e| (format!("config not loaded (changes won't be saved): {e}"), Instant::now()));
         let mut app = App {
             config_error,
@@ -412,7 +410,6 @@ impl App {
                 .workspaces
                 .iter()
                 .map(|w| config::WsCfg {
-                    name: w.name.clone(),
                     path: Some(config::tilde(&w.path)),
                     projects: w.projects.iter().map(|p| config::tilde(&p.path)).collect(),
                 })

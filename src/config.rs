@@ -11,10 +11,10 @@ pub struct Config {
     pub workspace: Vec<WsCfg>,
 }
 
-/// One workspace: a name, its folder and its project directories (`~`-relative where possible).
+/// One workspace: its folder and its project directories (`~`-relative where possible). Its name is
+/// the folder's (a `name` key from older configs is ignored).
 #[derive(Serialize, Deserialize)]
 pub struct WsCfg {
-    pub name: String,
     /// Missing in configs from before workspaces had a folder: then it's the projects' common
     /// parent folder (`~` without projects).
     #[serde(default)]
@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     fn folder_defaults_to_common_parent() {
-        let ws = |projects: &[&str]| WsCfg { name: "w".into(), path: None, projects: projects.iter().map(|s| s.to_string()).collect() };
+        let ws = |projects: &[&str]| WsCfg { path: None, projects: projects.iter().map(|s| s.to_string()).collect() };
         assert_eq!(ws(&["/a/b/x", "/a/b/y"]).folder(), PathBuf::from("/a/b"));
         assert_eq!(ws(&["/a/b/x", "/a/c"]).folder(), PathBuf::from("/a"));
         assert_eq!(ws(&["/a/b/x"]).folder(), PathBuf::from("/a/b"));

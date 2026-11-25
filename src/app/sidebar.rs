@@ -1,7 +1,7 @@
 //! Sidebar: the workspace → project → worktree tree, its keys, reordering, adding and closing.
 use super::{proj_key, subtree_end, ws_key, App, Close, Drop, Ev, Focus, Project, Prompt, PromptKind, Removal, Row, Workspace};
 use crate::api::Reply;
-use crate::{config, git, input, util};
+use crate::{config, git, input};
 use std::path::{Path, PathBuf};
 use winit::event::KeyEvent;
 use winit::keyboard::NamedKey;
@@ -245,13 +245,6 @@ impl App {
         self.prompt = Some(Prompt::new(PromptKind::NewWorktree(project), "New worktree branch", ""));
     }
 
-    pub(super) fn prompt_rename_workspace(&mut self, name: String) {
-        if self.ws_index(&name).is_none() {
-            return self.say(format!("workspace {name} no longer exists"));
-        }
-        self.prompt = Some(Prompt::new(PromptKind::RenameWorkspace(name.clone()), "Rename workspace", &name));
-    }
-
     /// Add a project to workspace `w` (default: the selected row's workspace, else the last one).
     pub(super) fn prompt_add_project(&mut self, w: Option<usize>) {
         let w = match w.or_else(|| self.selected_ws()).or(self.workspaces.len().checked_sub(1)) {
@@ -269,41 +262,19 @@ impl App {
         self.prompt = Some(Prompt::new(PromptKind::AddProject(name.clone()), format!("Add project to {name}"), &dir));
     }
 
-    /// A workspace name that's not empty and not taken (except by workspace `except`).
-    fn check_ws_name<'a>(&self, name: &'a str, except: Option<usize>) -> Result<&'a str, String> {
-        let name = name.trim();
-        if name.is_empty() {
-            return Err("workspace name is empty".into());
-        }
-        if self.workspaces.iter().enumerate().any(|(i, ws)| Some(i) != except && ws.name == name) {
-            return Err(format!("workspace {name} already exists"));
-        }
-        Ok(name)
-    }
-
     /// Add folder `dir` as a workspace, named after it ("api 2" when "api" is taken); its name.
     pub(super) fn add_workspace(&mut self, dir: &str) -> Result<String, String> {
         let path = std::fs::canonicalize(config::expand(dir.trim())).ok().filter(|p| p.is_dir()).ok_or(format!("not a directory: {dir}"))?;
         if let Some(ws) = self.workspaces.iter().find(|w| w.path == path) {
             return Err(format!("{} is already a workspace", ws.name));
         }
-        let base = util::file_name(&path);
-        let name = (1..).map(|i| if i == 1 { base.clone() } else { format!("{base} {i}") }).find(|n| self.ws_index(n).is_none()).expect("a free name");
-        self.workspaces.push(Workspace { name: name.clone(), path, projects: vec![] });
+        let ws = Workspace::new(path, vec![], &self.workspaces);
+        let name = ws.name.clone();
+        self.workspaces.push(ws);
         self.sel = self.rows().len() - 1;
         self.save();
         self.dirty = true;
         Ok(name)
-    }
-
-    pub(super) fn rename_workspace(&mut self, w: usize, name: &str) -> Result<(), String> {
-        let name = self.check_ws_name(name, Some(w))?;
-        let old = std::mem::replace(&mut self.workspaces[w].name, name.into());
-        if self.folded.remove(&ws_key(&old)) {
-            self.folded.insert(ws_key(name));
-        }
-        self.save();
-        Ok(())
     }
 
     pub(super) fn add_project(&mut self, w: usize, dir: &str) -> Result<String, String> {

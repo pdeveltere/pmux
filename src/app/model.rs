@@ -10,6 +10,14 @@ pub struct Workspace {
 }
 
 impl Workspace {
+    /// A workspace at `path`, named after its folder ("api 2" when `taken` has "api").
+    pub fn new(path: PathBuf, projects: Vec<Project>, taken: &[Workspace]) -> Self {
+        let base = util::file_name(&path);
+        let free = |n: &String| !taken.iter().any(|w| &w.name == n);
+        let name = (1..).map(|i| if i == 1 { base.clone() } else { format!("{base} {i}") }).find(free).expect("a free name");
+        Workspace { name, path, projects }
+    }
+
     /// Its own view plus every project's.
     pub fn view_paths(&self) -> Vec<PathBuf> {
         let mut v = vec![self.path.clone()];
@@ -166,7 +174,6 @@ pub enum Action {
     /// Add a project to this workspace (`None`: the selected one).
     AddProject(Option<String>),
     NewWorkspace,
-    RenameWorkspace(String),
     Toggle(String),
     NewWorktree(PathBuf),
     Open(PathBuf),
@@ -208,7 +215,6 @@ pub enum PromptKind {
     AddProject(String),
     NewWorkspace,
     NewWorktree(PathBuf),
-    RenameWorkspace(String),
 }
 
 pub struct Prompt {

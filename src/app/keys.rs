@@ -185,10 +185,6 @@ impl App {
                 None => Err(format!("workspace {ws} no longer exists")),
             },
             PromptKind::NewWorkspace => self.add_workspace(input).map(|name| format!("added workspace {name}")),
-            PromptKind::RenameWorkspace(ws) => match self.ws_index(&ws) {
-                Some(w) => self.rename_workspace(w, input).map(|()| String::new()),
-                None => Err(format!("workspace {ws} no longer exists")),
-            },
             PromptKind::NewWorktree(proj) => return self.add_worktree(&proj, input),
         };
         match r {
