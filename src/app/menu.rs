@@ -29,7 +29,8 @@ impl App {
                 if pr.has_linked() {
                     v.push(fold(self, proj_key(&pr.path)));
                 }
-                v.extend(path_items(&pr.path));
+                // No separator on top when nothing comes before the path items.
+                v.extend(path_items(&pr.path).into_iter().skip(v.is_empty() as usize));
                 v.extend([sep(), item("Close project", Action::Delete(Close::Project(pr.path.clone())))]);
                 v
             }
