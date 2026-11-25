@@ -132,7 +132,7 @@ pub enum Close {
     Workspace(String),
     Project(PathBuf),
     /// (project path, worktree path, force): `git worktree remove`, deletes the checkout.
-    Worktree(PathBuf, PathBuf, bool),
+    Worktree(PathBuf, PathBuf),
 }
 
 /// A `git worktree remove` in flight: what it removes, and who waits for the answer.
@@ -172,8 +172,6 @@ pub enum Action {
     /// Expand/collapse an explorer folder.
     FileToggle(PathBuf),
     Delete(Close),
-    /// Closes the menu, nothing else.
-    Cancel,
     Sep,
 }
 

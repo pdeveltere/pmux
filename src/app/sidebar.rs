@@ -1,5 +1,5 @@
 //! Sidebar: the workspace → project → worktree tree, its keys, reordering, adding and closing.
-use super::{proj_key, subtree_end, ws_key, Action, App, Close, Drop, Ev, Focus, Project, Prompt, PromptKind, Removal, Row, Workspace, item};
+use super::{proj_key, subtree_end, ws_key, App, Close, Drop, Ev, Focus, Project, Prompt, PromptKind, Removal, Row, Workspace};
 use crate::api::Reply;
 use crate::{config, git, input, util};
 use std::path::{Path, PathBuf};
@@ -348,7 +348,7 @@ impl App {
                 let pr = self.project(w, p);
                 (format!("project {}", pr.name), pr.view_paths())
             }
-            Close::Worktree(_, wt, _) => (format!("worktree {}", self.names(wt).2), vec![wt.clone()]),
+            Close::Worktree(_, wt) => (format!("worktree {}", self.names(wt).2), vec![wt.clone()]),
         };
         let n = paths.iter().map(|v| self.panes_in(v).len()).sum();
         Some((name, paths, n))
@@ -357,14 +357,12 @@ impl App {
     /// Close right away if nothing would be lost, otherwise ask first:
     /// - a workspace asks when panes run in it;
     /// - a project never asks (only the sidebar row goes; files stay);
-    /// - a worktree is first removed the safe way (`git worktree remove` without `--force`), and
-    ///   only when git refuses because of uncommitted or untracked files do we ask
-    ///   (`worktree_removed`).
+    /// - a worktree never asks: it's removed with `--force`, uncommitted and untracked files and all.
     pub(super) fn request_close(&mut self, c: Close) {
         let Some((name, _, n)) = self.close_info(&c) else { return self.say("that's no longer in the sidebar") };
         match c {
-            Close::Worktree(_, wt, _) if self.removing.contains(&wt) => self.say(format!("already deleting {name}")),
-            Close::Worktree(proj, wt, force) => self.start_removal(Removal { proj, wt, name, force, reply: None, auto: None }),
+            Close::Worktree(_, wt) if self.removing.contains(&wt) => self.say(format!("already deleting {name}")),
+            Close::Worktree(proj, wt) => self.start_removal(Removal { proj, wt, name, force: true, reply: None, auto: None }),
             c @ Close::Project(..) => self.close(c),
             c if n == 0 => self.close(c),
             c => {
@@ -379,7 +377,7 @@ impl App {
         self.leave_views(&paths);
         match c {
             // Off the UI thread: removing a big checkout takes a while. The row stays until done.
-            Close::Worktree(proj, wt, force) => self.start_removal(Removal { proj, wt, name, force, reply: None, auto: None }),
+            Close::Worktree(proj, wt) => self.start_removal(Removal { proj, wt, name, force: true, reply: None, auto: None }),
             Close::Workspace(n) => {
                 if let Some(w) = self.ws_index(&n) {
                     let ws = self.workspaces.remove(w);
@@ -454,12 +452,6 @@ impl App {
                 self.say(format!("deleted {}", r.name));
                 Reply::ok(format!("deleted {}", config::tilde(&r.wt)))
             }
-            // From the sidebar, unforced, and git refused: uncommitted or untracked files. Ask
-            // before throwing them away (git's message says "use --force to delete it").
-            Err(e) if !r.force && r.reply.is_none() && e.contains("--force") => {
-                self.reload_git();
-                return self.confirm_force(r);
-            }
             Err(e) => {
                 let m = format!("couldn't delete {}: {e}", r.name);
                 self.say(m.clone());
@@ -472,24 +464,6 @@ impl App {
         self.reload_git();
         self.sel = self.sel.min(self.rows().len().saturating_sub(1));
         self.dirty = true;
-    }
-
-    /// Git refused to delete `r.wt` because of uncommitted or untracked files: ask, in a menu
-    /// right under its row (where the user just clicked), whether to throw them away.
-    fn confirm_force(&mut self, r: Removal) {
-        let rows = self.rows();
-        let Some(i) = rows.iter().position(|row| self.row_view(*row).as_ref() == Some(&r.wt)) else {
-            return self.say(format!("couldn't delete {}: it has uncommitted or untracked files", r.name));
-        };
-        let t = self.sidebar_tree(rows.len()).row(rows[i].level(), i);
-        self.say(format!("{} has uncommitted or untracked files", r.name));
-        let items = vec![
-            item("Delete anyway, losing uncommitted files", Action::Delete(Close::Worktree(r.proj, r.wt, true))),
-            item("Keep worktree", Action::Cancel),
-        ];
-        self.sel = i;
-        self.show_menu(items, t.text_x, t.bg.y + t.bg.h);
-        self.menu.as_mut().expect("just shown").hover = Some(1);
     }
 
     /// After removing a workspace or project from the tree.

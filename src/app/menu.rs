@@ -40,7 +40,7 @@ impl App {
                 v.extend(path_items(&wt.path));
                 // Not while it's already being deleted: the row says "deleting…".
                 if !wt.main && !self.removing.contains(&wt.path) {
-                    v.extend([sep(), item("Delete worktree", Action::Delete(Close::Worktree(pr.path.clone(), wt.path.clone(), false)))]);
+                    v.extend([sep(), item("Delete worktree", Action::Delete(Close::Worktree(pr.path.clone(), wt.path.clone())))]);
                 }
                 v
             }
@@ -123,7 +123,7 @@ impl App {
                 }
             }
             Action::Delete(c) => self.request_close(c),
-            Action::Cancel | Action::Sep => {}
+            Action::Sep => {}
         }
     }
 }
