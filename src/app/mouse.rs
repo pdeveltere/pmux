@@ -289,11 +289,11 @@ impl App {
         }
     }
 
-    /// Left press in the sidebar: the header's + (add a workspace), a workspace's folder icon
+    /// Left press in the sidebar: the header's + (a workspace at ~), a workspace's folder icon
     /// (fold), or a row.
     fn sidebar_press(&mut self, x: f32, y: f32) {
         if self.sidebar_plus().contains(x, y) {
-            return self.prompt_add_workspace();
+            return self.add_home_workspace();
         }
         let Some(i) = self.sidebar_row_at(y) else { return };
         let row = self.rows()[i];

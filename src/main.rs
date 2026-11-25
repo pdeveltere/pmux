@@ -65,7 +65,7 @@ keys:
   ⌘↑ ⌘↓ prev/next worktree   ⌘N next pane needing you   ⌘= ⌘- ⌘0 font size   ⌘Q quit
   C-a prefix (tmux style): | split  h/l focus  x close  c clear  j/k worktree  n attention  Tab sidebar  q quit
 sidebar:
-  j/k move  Enter open  h/l fold  a (or +) add workspace  w new worktree
+  j/k move  Enter open  h/l fold  a add workspace (+: one at ~)  w new worktree
   x close workspace  Esc back
 ";
 

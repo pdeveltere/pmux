@@ -159,6 +159,17 @@ impl App {
         self.prompt = Some(Prompt::new(PromptKind::NewWorktree(ws), "New worktree branch", ""));
     }
 
+    /// The header's +: a workspace at `~`, opened right away (it's just opened if it's there).
+    pub(super) fn add_home_workspace(&mut self) {
+        let home = std::fs::canonicalize(config::home()).unwrap_or_else(|_| config::home());
+        if self.ws_index(&home).is_none() {
+            if let Err(e) = self.add_workspace(&home.display().to_string()) {
+                return self.say(e);
+            }
+        }
+        self.open_view(home);
+    }
+
     /// Add folder `dir` as a workspace; its name on success.
     pub(super) fn add_workspace(&mut self, dir: &str) -> Result<String, String> {
         let Some(ws) = Workspace::open(&config::expand(dir.trim())) else { return Err(format!("not a directory: {dir}")) };
