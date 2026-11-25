@@ -30,7 +30,8 @@ impl App {
     /// moved since its last check, work out whether it's merged; `Ev::Merged` reports each.
     pub(super) fn check_merged(&self, views: &[PathBuf]) {
         let todo: Vec<(PathBuf, PathBuf, String, Option<String>)> = self
-            .projects()
+            .workspaces
+            .iter()
             .flat_map(|p| p.worktrees.iter().flatten().map(move |w| (p, w)))
             .filter(|(_, w)| !w.main && !w.branch.starts_with('@') && !super::model::is_default_branch(&w.branch) && views.contains(&w.path))
             .map(|(p, w)| (p.path.clone(), w.path.clone(), w.branch.clone(), self.merge_keys.get(&w.path).cloned()))
@@ -55,7 +56,7 @@ impl App {
 
     pub(super) fn merged_checked(&mut self, proj: PathBuf, wt: PathBuf, branch: String, key: String, how: Option<git::Merge>) {
         // Gone or switched branch meanwhile: the verdict is about something else.
-        let current = self.projects().flat_map(|p| p.worktrees.iter().flatten()).any(|w| w.path == wt && w.branch == branch);
+        let current = self.workspaces.iter().flat_map(|p| p.worktrees.iter().flatten()).any(|w| w.path == wt && w.branch == branch);
         if !current {
             return;
         }

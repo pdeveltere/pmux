@@ -2,12 +2,8 @@
 use crate::{git, util};
 use std::path::{Path, PathBuf};
 
+/// A workspace: one directory, and its git worktrees nested under it.
 pub struct Workspace {
-    pub name: String,
-    pub projects: Vec<Project>,
-}
-
-pub struct Project {
     pub path: PathBuf,
     pub name: String,
     pub worktrees: Option<Vec<git::Worktree>>,
@@ -17,23 +13,23 @@ pub fn is_default_branch(b: &str) -> bool {
     b == "main" || b == "master"
 }
 
-impl Project {
-    /// A project for directory `path` (canonicalized); `None` if it isn't one.
+impl Workspace {
+    /// A workspace for directory `path` (canonicalized); `None` if it isn't one.
     pub fn open(path: &Path) -> Option<Self> {
         let path = std::fs::canonicalize(path).ok().filter(|p| p.is_dir())?;
-        Some(Project { name: util::file_name(&path), worktrees: git::worktrees(&path), path })
+        Some(Workspace { name: util::file_name(&path), worktrees: git::worktrees(&path), path })
     }
     pub fn branch(&self) -> Option<&str> {
         self.worktrees.as_ref()?.iter().find(|w| w.main).map(|w| w.branch.as_str())
     }
-    /// Worktrees listed under the project: all, except a main checkout on the default branch (that *is* the project row).
+    /// Worktrees listed under the workspace: all, except a main checkout on the default branch (that *is* the workspace row).
     pub fn listed(&self) -> impl Iterator<Item = (usize, &git::Worktree)> {
         self.worktrees.iter().flatten().enumerate().filter(|(_, w)| !(w.main && is_default_branch(&w.branch)))
     }
     pub fn has_linked(&self) -> bool {
         self.listed().next().is_some()
     }
-    /// The project's own view plus one per linked worktree.
+    /// The workspace's own view plus one per linked worktree.
     pub fn view_paths(&self) -> Vec<PathBuf> {
         let mut v = vec![self.path.clone()];
         v.extend(self.worktrees.iter().flatten().filter(|w| !w.main).map(|w| w.path.clone()));
@@ -41,35 +37,30 @@ impl Project {
     }
 }
 
-/// Fold keys in `App::folded`.
-pub fn ws_key(name: &str) -> String {
-    format!("w:{name}")
-}
-pub fn proj_key(p: &Path) -> String {
+/// Fold key in `App::folded` of the workspace at `p`.
+pub fn ws_key(p: &Path) -> String {
     format!("p:{}", p.display())
 }
 
-/// A sidebar row: indices into workspaces / projects / worktrees.
+/// A sidebar row: indices into workspaces / worktrees.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Row {
     Ws(usize),
-    Proj(usize, usize),
-    Wt(usize, usize, usize),
+    Wt(usize, usize),
 }
 
 impl Row {
     /// The workspace this row belongs to.
     pub fn ws(self) -> usize {
         match self {
-            Row::Ws(w) | Row::Proj(w, _) | Row::Wt(w, _, _) => w,
+            Row::Ws(w) | Row::Wt(w, _) => w,
         }
     }
-    /// Tree depth: workspace 0, project 1, worktree 2.
+    /// Tree depth: workspace 0, worktree 1.
     pub fn level(self) -> usize {
         match self {
             Row::Ws(_) => 0,
-            Row::Proj(..) => 1,
-            Row::Wt(..) => 2,
+            Row::Wt(..) => 1,
         }
     }
 }
@@ -124,19 +115,19 @@ impl View {
     }
 }
 
-/// Something to remove from the sidebar. Named by identity (workspace name, project path), not
-/// by position: a menu or y/n prompt can stay open while an agent's `pmux ws rm` / `project add`
-/// shifts the lists, and must still act on what it was opened for (or on nothing).
+/// Something to remove from the sidebar. Named by identity (path), not by position: a menu or
+/// y/n prompt can stay open while an agent's `pmux ws rm` / `ws add` shifts the list, and must
+/// still act on what it was opened for (or on nothing).
 #[derive(Clone)]
 pub enum Close {
-    Workspace(String),
-    Project(PathBuf),
-    /// (project path, worktree path, force): `git worktree remove`, deletes the checkout.
+    Workspace(PathBuf),
+    /// (workspace path, worktree path): `git worktree remove --force`, deletes the checkout.
     Worktree(PathBuf, PathBuf),
 }
 
 /// A `git worktree remove` in flight: what it removes, and who waits for the answer.
 pub struct Removal {
+    /// The workspace (repo) it belongs to.
     pub proj: PathBuf,
     pub wt: PathBuf,
     /// Display name ("worktree feat-x").
@@ -152,10 +143,8 @@ pub struct Removal {
 /// A context-menu entry.
 #[derive(Clone)]
 pub enum Action {
-    /// Add a project to this workspace (`None`: the selected one).
-    AddProject(Option<String>),
-    NewWorkspace,
-    RenameWorkspace(String),
+    /// Add a workspace (asks for its folder).
+    AddWorkspace,
     Toggle(String),
     NewWorktree(PathBuf),
     Open(PathBuf),
@@ -193,13 +182,11 @@ pub struct Menu {
 }
 
 pub enum PromptKind {
-    /// Add a project to the workspace with this name.
-    AddProject(String),
-    NewWorkspace,
+    /// Add a workspace: the folder.
+    AddWorkspace,
     NewWorktree(PathBuf),
-    /// Yes/no before closing something that still has panes (or a worktree with changes).
+    /// Yes/no before closing something that still has panes.
     Confirm(Close),
-    RenameWorkspace(String),
 }
 
 pub struct Prompt {
@@ -214,20 +201,13 @@ impl Prompt {
     }
 }
 
-/// Where a dragged sidebar row lands: insertion index before removal.
-#[derive(Clone, Copy, PartialEq)]
-pub enum Drop {
-    Ws(usize),
-    Proj(usize, usize),
-}
-
-/// A left-press on a workspace/project row: a click on release, or a reorder drag once it moves.
+/// A left-press on a workspace row: a click on release, or a reorder drag once it moves.
 pub struct Drag {
     pub row: Row,
     pub(super) start_y: f32,
     pub active: bool,
-    /// (target, row boundary the indicator line sits on, tree level of the line).
-    pub target: Option<(Drop, usize, usize)>,
+    /// (workspace insertion index before removal, row boundary the indicator line sits on).
+    pub target: Option<(usize, usize)>,
 }
 
 /// A part of the tab bar.
@@ -265,9 +245,9 @@ mod tests {
 
     #[test]
     fn subtree_and_view_remove() {
-        let rows = [Row::Ws(0), Row::Proj(0, 0), Row::Wt(0, 0, 1), Row::Proj(0, 1), Row::Ws(1)];
-        assert_eq!(subtree_end(&rows, 0), 4);
-        assert_eq!(subtree_end(&rows, 1), 3);
+        let rows = [Row::Ws(0), Row::Wt(0, 1), Row::Wt(0, 2), Row::Ws(1), Row::Ws(2)];
+        assert_eq!(subtree_end(&rows, 0), 3);
+        assert_eq!(subtree_end(&rows, 1), 2);
         assert_eq!(subtree_end(&rows, 3), 4);
         assert_eq!(subtree_end(&rows, 4), 5);
 

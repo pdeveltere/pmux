@@ -39,7 +39,7 @@ const USAGE: &str = "pmux: agent-aware terminal multiplexer (prototype)
 usage:
   pmux                      open the pmux window
   pmux ls                   list panes
-  pmux tree                 workspaces / projects / worktrees / panes
+  pmux tree                 workspaces / worktrees / panes
   pmux whoami               this pane
   pmux read <pane> [n]      last n lines of a pane's screen
   pmux send <pane> <text>   type text + Enter into a pane
@@ -48,10 +48,8 @@ usage:
   pmux open <file>          open a file in an editor tab of this worktree
   pmux status <state>       set my state: working|waiting|idle|done|error|clear
   pmux title <text>         set my title
-  pmux ws new <name>                   add a workspace
-  pmux project add <dir> [-w <ws>]     add a project (default: my workspace)
-  pmux ws rm <name> [--force]          close a workspace (sidebar only)
-  pmux project rm <dir|name> [--force] close a project (sidebar only; files untouched)
+  pmux ws add <dir>                    add a folder as a workspace
+  pmux ws rm <dir|name> [--force]      close a workspace (sidebar only; files untouched)
   pmux worktree rm <dir> [--force]     delete a linked worktree (git worktree remove)
   pmux guide                how agents should use pmux
   pmux import herdr [--run] open Herdr's live terminals here (claude sessions resumed)
@@ -67,8 +65,8 @@ keys:
   ⌘↑ ⌘↓ prev/next worktree   ⌘N next pane needing you   ⌘= ⌘- ⌘0 font size   ⌘Q quit
   C-a prefix (tmux style): | split  h/l focus  x close  c clear  j/k worktree  n attention  Tab sidebar  q quit
 sidebar:
-  j/k move  Enter open  h/l fold  a add project  w new worktree  W new workspace
-  D remove worktree  x close workspace/project (or hover ×)  Esc back
+  j/k move  Enter open  h/l fold  a (or +) add workspace  w new worktree
+  x close workspace  Esc back
 ";
 
 struct Runner {

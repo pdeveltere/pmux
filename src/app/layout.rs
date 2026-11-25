@@ -237,6 +237,16 @@ impl App {
         self.header_of(self.workspaces_content())
     }
 
+    /// The + (add workspace) button at the right end of the sidebar header.
+    pub fn sidebar_plus(&self) -> R {
+        let h = self.sidebar_header();
+        if !self.show_sidebar || h.h <= 0.0 {
+            return R::default();
+        }
+        let d = self.px(20.0).min(h.h);
+        R { x: h.x + h.w - d - self.px(6.0), w: d, ..h.center(d, d) }
+    }
+
     pub fn files_header(&self) -> R {
         self.header_of(self.files_content())
     }
