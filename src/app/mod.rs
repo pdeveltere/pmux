@@ -1,4 +1,4 @@
-//! App model and behaviour: workspaces (folders) → worktrees, panes, keys, mouse, socket API.
+//! App model and behaviour: workspaces → projects → worktrees, panes, keys, mouse, socket API.
 //!
 //! `App` is one struct; its behaviour is split by concern across the submodules, each adding an
 //! `impl App` block: `layout` (geometry), `pane` (terminals), `sidebar`, `agents` (agents panel), `explorer` (file panel),
@@ -114,8 +114,6 @@ pub struct App {
     pub show_agents: bool,
     /// Status bar panel button under the mouse.
     pub status_hover: Option<Panel>,
-    /// The sidebar header's + (add workspace) is under the mouse.
-    pub plus_hover: bool,
     pub sidebar_w: f32, // logical px
     pub sel: usize,
     pub hover: Option<usize>,
@@ -213,7 +211,7 @@ impl App {
     pub fn new(tx: Tx, socket: PathBuf) -> Self {
         let default = || {
             let cwd = std::env::current_dir().unwrap_or_default();
-            config::Config::new(vec![config::tilde(&cwd)])
+            config::Config { workspace: vec![config::WsCfg { name: "default".into(), projects: vec![cwd.display().to_string()] }] }
         };
         // A config we can't parse is left alone (not overwritten) until the user fixes it.
         let (cfg, config_error) = match config::load() {
@@ -228,7 +226,11 @@ impl App {
                 (default(), Some(e))
             }
         };
-        let workspaces = cfg.workspaces.iter().filter_map(|p| Workspace::open(&config::expand(p))).collect();
+        let workspaces = cfg
+            .workspace
+            .into_iter()
+            .map(|w| Workspace { name: w.name, projects: w.projects.iter().filter_map(|p| Project::open(&config::expand(p))).collect() })
+            .collect();
         let flash = config_error.as_ref().map(|e| (format!("config not loaded (changes won't be saved): {e}"), Instant::now()));
         let mut app = App {
             config_error,
@@ -241,7 +243,6 @@ impl App {
             show_sidebar: true,
             show_agents: true,
             status_hover: None,
-            plus_hover: false,
             sidebar_w: SIDEBAR_W,
             sel: 0,
             hover: None,
@@ -394,35 +395,46 @@ impl App {
 
     // ---- persistence and watching ----
 
-    /// Persist the workspaces (not while the config on disk failed to load).
+    /// Persist workspaces and projects (not while the config on disk failed to load).
     fn save(&self) {
         if self.config_error.is_some() {
             return;
         }
-        config::save(&config::Config::new(self.workspaces.iter().map(|w| config::tilde(&w.path)).collect()));
+        let c = config::Config {
+            workspace: self
+                .workspaces
+                .iter()
+                .map(|w| config::WsCfg { name: w.name.clone(), projects: w.projects.iter().map(|p| config::tilde(&p.path)).collect() })
+                .collect(),
+        };
+        config::save(&c);
     }
 
-    /// Watch every workspace's git metadata, recount every worktree's behind, look for merged ones.
+    pub(super) fn projects(&self) -> impl Iterator<Item = &Project> {
+        self.workspaces.iter().flat_map(|w| &w.projects)
+    }
+
+    /// Watch every project's git metadata, recount every worktree's behind, look for merged ones.
     fn rewatch(&self) {
         self.set_git_watch();
-        let wts: Vec<PathBuf> = self.workspaces.iter().flat_map(|p| p.worktrees.iter().flatten()).map(|w| w.path.clone()).collect();
+        let wts: Vec<PathBuf> = self.projects().flat_map(|p| p.worktrees.iter().flatten()).map(|w| w.path.clone()).collect();
         self.refresh_refs(wts);
     }
 
     fn set_git_watch(&self) {
-        self.watcher.set(self.workspaces.iter().flat_map(|p| git::watch_paths(&p.path)).collect());
+        self.watcher.set(self.projects().flat_map(|p| git::watch_paths(&p.path)).collect());
     }
 
-    /// Re-read every workspace's worktrees and watch them (we changed them).
+    /// Re-read every project's worktrees and watch them (we changed them).
     fn reload_git(&mut self) {
         self.reload_git_in(None);
     }
 
-    /// Re-read the worktrees of the workspaces whose git dir holds a `changed` path (all with
+    /// Re-read the worktrees of the projects whose git dir holds a `changed` path (all with
     /// `None`), re-watch, and refresh their behind counts and the explorer's git colors.
     fn reload_git_in(&mut self, changed: Option<&[PathBuf]>) {
         let mut views: Vec<PathBuf> = Vec::new();
-        for p in self.workspaces.iter_mut() {
+        for p in self.workspaces.iter_mut().flat_map(|w| &mut w.projects) {
             let hit = changed.is_none_or(|c| git::common_dir(&p.path).is_some_and(|d| c.iter().any(|x| x.starts_with(&d))));
             if hit {
                 p.worktrees = git::worktrees(&p.path);
@@ -434,7 +446,7 @@ impl App {
             return;
         }
         self.set_git_watch();
-        let all: HashSet<PathBuf> = self.workspaces.iter().flat_map(|p| p.worktrees.iter().flatten()).map(|w| w.path.clone()).collect();
+        let all: HashSet<PathBuf> = self.projects().flat_map(|p| p.worktrees.iter().flatten()).map(|w| w.path.clone()).collect();
         self.merged.retain(|k, _| all.contains(k));
         self.merge_keys.retain(|k, _| all.contains(k));
         let wts: Vec<PathBuf> = all.into_iter().filter(|w| views.contains(w)).collect();
@@ -446,18 +458,21 @@ impl App {
 
     // ---- views ----
 
-    /// (workspace, worktree) names for a view path.
-    pub fn names(&self, view: &Path) -> (String, String) {
+    /// (workspace, project, worktree) names for a view path.
+    pub fn names(&self, view: &Path) -> (String, String, String) {
         for ws in &self.workspaces {
-            if ws.path == view {
-                return (ws.name.clone(), ws.branch().unwrap_or(&ws.name).to_string());
-            }
-            if let Some(wt) = ws.worktrees.iter().flatten().find(|w| w.path == view) {
-                return (ws.name.clone(), wt.branch.clone());
+            for p in &ws.projects {
+                if p.path == view {
+                    let b = p.branch().unwrap_or(&p.name).to_string();
+                    return (ws.name.clone(), p.name.clone(), b);
+                }
+                if let Some(wt) = p.worktrees.iter().flatten().find(|w| w.path == view) {
+                    return (ws.name.clone(), p.name.clone(), wt.branch.clone());
+                }
             }
         }
         let n = util::file_name(view);
-        (n.clone(), n)
+        (String::new(), n.clone(), n)
     }
 
     /// Every pane in a view, across all its tabs.

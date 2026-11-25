@@ -10,7 +10,7 @@ use std::sync::mpsc::channel;
 pub const GUIDE: &str = "pmux guide (for agents)
 
 You are running inside pmux if $PMUX=1. Your pane is $PMUX_PANE.
-Your workspace (a folder) is $PMUX_WORKSPACE, worktree $PMUX_WORKTREE.
+Your project is $PMUX_PROJECT, worktree $PMUX_WORKTREE, workspace $PMUX_WORKSPACE.
 
 Orient (only when the task involves other panes):
   pmux tree                 see all workspaces, worktrees and panes; yours is marked ◀ here

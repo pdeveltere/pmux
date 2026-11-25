@@ -26,7 +26,7 @@ pub struct Auto {
 }
 
 impl App {
-    /// Off the UI thread, for the worktrees in `views`: read each of their workspaces' refs once
+    /// Off the UI thread, for the worktrees in `views`: read each of their projects' refs once
     /// (`git::refs`), report behind counts (`Ev::Behind`), then work out whether each linked
     /// worktree whose branch or default branch moved since its last check is merged
     /// (`Ev::Merged` reports each).
@@ -34,12 +34,11 @@ impl App {
         if views.is_empty() {
             return;
         }
-        // Per workspace: its worktrees in `views`, with the merge key last checked (`None` in
+        // Per project: its worktrees in `views`, with the merge key last checked (`None` in
         // the outer option: not a candidate for being merged).
         type Todo = (PathBuf, String, Option<Option<String>>);
         let todo: Vec<(PathBuf, Vec<Todo>)> = self
-            .workspaces
-            .iter()
+            .projects()
             .map(|p| {
                 let wts = p.worktrees.iter().flatten().filter(|w| views.contains(&w.path)).map(|w| {
                     let candidate = !w.main && !w.branch.starts_with('@') && !super::model::is_default_branch(&w.branch);
@@ -79,7 +78,7 @@ impl App {
 
     pub(super) fn merged_checked(&mut self, proj: PathBuf, wt: PathBuf, branch: String, key: String, how: Option<git::Merge>) {
         // Gone or switched branch meanwhile: the verdict is about something else.
-        let current = self.workspaces.iter().flat_map(|p| p.worktrees.iter().flatten()).any(|w| w.path == wt && w.branch == branch);
+        let current = self.projects().flat_map(|p| p.worktrees.iter().flatten()).any(|w| w.path == wt && w.branch == branch);
         if !current {
             return;
         }

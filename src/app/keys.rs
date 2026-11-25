@@ -167,7 +167,7 @@ impl App {
                 p.input.pop();
             }
             Some(NamedKey::Tab) => {
-                if matches!(p.kind, PromptKind::AddWorkspace) {
+                if matches!(p.kind, PromptKind::AddProject(_)) {
                     p.input = complete_dir(&p.input);
                 }
             }
@@ -186,8 +186,17 @@ impl App {
             return;
         }
         let r = match p.kind {
-            PromptKind::AddWorkspace => self.add_workspace(input).map(|name| format!("added workspace {name}")),
-            PromptKind::NewWorktree(ws) => return self.add_worktree(&ws, input),
+            // By name: the workspace may have moved (or gone) while the prompt was open.
+            PromptKind::AddProject(ws) => match self.ws_index(&ws) {
+                Some(w) => self.add_project(w, input).map(|name| format!("added {name}")),
+                None => Err(format!("workspace {ws} no longer exists")),
+            },
+            PromptKind::NewWorkspace => self.add_workspace(input).map(|()| String::new()),
+            PromptKind::RenameWorkspace(ws) => match self.ws_index(&ws) {
+                Some(w) => self.rename_workspace(w, input).map(|()| String::new()),
+                None => Err(format!("workspace {ws} no longer exists")),
+            },
+            PromptKind::NewWorktree(proj) => return self.add_worktree(&proj, input),
             PromptKind::Confirm(c) => return self.close(c),
         };
         match r {

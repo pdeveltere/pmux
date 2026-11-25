@@ -1,6 +1,6 @@
 //! Mouse: hover state and cursor shape, clicks, panel resizing, row drags, the wheel.
 use super::pane::MouseKind;
-use super::{ws_key, App, Drag, Edge, Row, TabHit};
+use super::{proj_key, App, Drag, Edge, Row, TabHit};
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
@@ -56,7 +56,7 @@ impl App {
         }
         if let Some(d) = &self.drag {
             if d.active || (y - d.start_y).abs() > self.px(DRAG_START) {
-                let target = if self.sidebar_rect().contains(x, y) { self.drop_target(y) } else { None };
+                let target = if self.sidebar_rect().contains(x, y) { self.drop_target(d.row, y) } else { None };
                 let d = self.drag.as_mut().expect("drag in progress");
                 d.active = true;
                 d.target = target;
@@ -71,7 +71,7 @@ impl App {
 
     /// What's under the mouse: hovered rows/buttons and the cursor shape.
     fn update_hover(&mut self, x: f32, y: f32) {
-        let (mut hover, mut tab, mut file, mut agent, mut plus) = (None, None, None, None, false);
+        let (mut hover, mut tab, mut file, mut agent) = (None, None, None, None);
         let button = self.panel_button_at(x, y);
         let mut icon = CursorIcon::Default;
         let mut link = None;
@@ -87,15 +87,13 @@ impl App {
                 link = self.files_link_at(x, y);
             } else if self.agents_rect().contains(x, y) {
                 agent = self.agent_row_at(y);
-            } else if self.sidebar_plus().contains(x, y) {
-                plus = true;
             } else if self.sidebar_rect().contains(x, y) {
                 hover = self.sidebar_row_at(y);
             } else if self.pane_body_at(x, y).is_some() {
                 icon = CursorIcon::Text;
             }
             tab = self.tab_at(x, y);
-            if plus || hover.is_some() || file.is_some() || tab.is_some() || agent.is_some() {
+            if hover.is_some() || file.is_some() || tab.is_some() || agent.is_some() {
                 icon = CursorIcon::Pointer;
             }
         }
@@ -103,8 +101,8 @@ impl App {
             self.link_hover = link.map(|i| (i, std::time::Instant::now()));
             self.dirty = true;
         }
-        if (hover, tab, file, agent, button, plus) != (self.hover, self.tab_hover, self.files_hover, self.agents_hover, self.status_hover, self.plus_hover) {
-            (self.hover, self.tab_hover, self.files_hover, self.agents_hover, self.status_hover, self.plus_hover) = (hover, tab, file, agent, button, plus);
+        if (hover, tab, file, agent, button) != (self.hover, self.tab_hover, self.files_hover, self.agents_hover, self.status_hover) {
+            (self.hover, self.tab_hover, self.files_hover, self.agents_hover, self.status_hover) = (hover, tab, file, agent, button);
             self.dirty = true;
         }
         self.set_cursor(icon);
@@ -282,31 +280,27 @@ impl App {
         if let Some(d) = self.drag.take() {
             match (d.active, d.target) {
                 (false, _) => self.click_row(d.row),
-                (true, Some((t, _))) => self.drop_row(d.row, t),
+                (true, Some((t, _, _))) => self.drop_row(d.row, t),
                 _ => {}
             }
             self.on_cursor_moved(x, y);
         }
     }
 
-    /// Left press in the sidebar: the header's + (a workspace at ~), a workspace's folder icon
-    /// (fold), or a row.
+    /// Left press in the sidebar: a project's folder icon (fold), or a row.
     fn sidebar_press(&mut self, x: f32, y: f32) {
-        if self.sidebar_plus().contains(x, y) {
-            return self.add_home_workspace();
-        }
         let Some(i) = self.sidebar_row_at(y) else { return };
         let row = self.rows()[i];
         self.sel = i;
-        // A workspace's folder icon folds it; the rest of the row opens it.
-        if let Row::Ws(w) = row {
-            let ws = &self.workspaces[w];
-            if ws.has_linked() && self.sidebar_tree(self.rows().len()).row(row.level(), i).icon.contains(x, y) {
-                return self.toggle_fold(ws_key(&ws.path));
+        // A project's folder icon folds it; the rest of the row opens it.
+        if let Row::Proj(w, p) = row {
+            let proj = self.project(w, p);
+            if proj.has_linked() && self.sidebar_tree(self.rows().len()).row(row.level(), i).icon.contains(x, y) {
+                return self.toggle_fold(proj_key(&proj.path));
             }
         }
-        // Workspace rows act on release, so they can be dragged to reorder.
-        if matches!(row, Row::Ws(_)) {
+        // Workspace/project rows act on release, so they can be dragged to reorder.
+        if matches!(row, Row::Ws(_) | Row::Proj(..)) {
             self.drag = Some(Drag { row, start_y: y, active: false, target: None });
             return;
         }

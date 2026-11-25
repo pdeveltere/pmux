@@ -1,5 +1,5 @@
 //! Build one frame's draw list: sidebar, tabs, terminal grids, file explorer, status bar, menu.
-use crate::app::{ago, is_default_branch, subtree_end, ws_key, Action, AgentRow, App, Focus, Group, Pane, Panel, Row, State, TabHit, Tree, TreeRow, R};
+use crate::app::{ago, is_default_branch, proj_key, subtree_end, ws_key, Action, AgentRow, App, Focus, Group, Pane, Panel, Row, State, TabHit, Tree, TreeRow, R};
 use crate::git::FileState;
 use crate::gpu::{Inst, COLOR, MASK, RECT};
 use crate::icons::{self, Icon};
@@ -352,18 +352,10 @@ fn draw_tree(
     }
 }
 
-/// Sidebar: workspaces → worktrees, drawn like the explorer (Zed's project panel).
+/// Sidebar: workspaces → projects → worktrees, drawn like the explorer (Zed's project panel).
 fn sidebar(app: &App, p: &mut Painter) {
     panel(app, p, app.sidebar_rect(), true);
     panel_header(app, p, app.sidebar_header(), "Workspaces", app.focus == Focus::Sidebar);
-    // + adds a workspace.
-    let plus = app.sidebar_plus();
-    if plus.h > 0.0 {
-        if app.plus_hover {
-            p.rect(plus, BAND_HOVER);
-        }
-        p.text_centered("+", plus, 15.0, if app.plus_hover { TEXT } else { MUTED });
-    }
     let rows = app.rows();
     let tree = app.sidebar_tree(rows.len());
     let levels: Vec<usize> = rows.iter().map(|r| r.level()).collect();
@@ -379,23 +371,30 @@ fn sidebar(app: &App, p: &mut Painter) {
         let (label, icon, fg, bold, panes): (String, &'static Icon, C, bool, Vec<u32>) = match rows[i] {
             Row::Ws(wi) => {
                 let ws = &app.workspaces[wi];
-                let folded = app.folded.contains(&ws_key(&ws.path));
-                let main_listed = ws.listed().any(|(_, w)| w.main);
-                // Folded: its worktrees' panes roll up into this row.
+                let folded = app.folded.contains(&ws_key(&ws.name));
+                // Folded: its panes roll up into this row.
+                let panes = if folded { app.panes.values().filter(|pn| app.names(&pn.view).0 == ws.name).map(|pn| pn.id).collect() } else { vec![] };
+                let open = !folded && !ws.projects.is_empty();
+                (ws.name.clone(), folder(open), TEXT, true, panes)
+            }
+            Row::Proj(wi, pi) => {
+                let pr = &app.workspaces[wi].projects[pi];
+                let folded = app.folded.contains(&proj_key(&pr.path));
+                let main_listed = pr.listed().any(|(_, w)| w.main);
                 let panes: Vec<u32> = if folded {
-                    ws.view_paths().iter().flat_map(|v| app.panes_in(v)).collect()
+                    pr.view_paths().iter().flat_map(|v| app.panes_in(v)).collect()
                 } else if main_listed {
                     vec![]
                 } else {
-                    app.panes_in(&ws.path)
+                    app.panes_in(&pr.path)
                 };
                 if !main_listed {
-                    behind_of = Some(&ws.path);
+                    behind_of = Some(&pr.path);
                 }
-                (ws.name.clone(), folder(ws.has_linked() && !folded), TEXT, false, panes)
+                (pr.name.clone(), folder(pr.has_linked() && !folded), TEXT, false, panes)
             }
-            Row::Wt(wi, ti) => {
-                let w = &app.workspaces[wi].worktrees.as_ref().expect("row has worktrees")[ti];
+            Row::Wt(wi, pi, ti) => {
+                let w = &app.workspaces[wi].projects[pi].worktrees.as_ref().expect("row has worktrees")[ti];
                 let panes = app.panes_in(&w.path);
                 behind_of = Some(&w.path);
                 let dim = panes.is_empty() || app.removing.contains(&w.path);
@@ -431,10 +430,10 @@ fn sidebar(app: &App, p: &mut Painter) {
         if let Some(i) = rows.iter().position(|r| *r == d.row).filter(|i| tree.visible().contains(i)) {
             p.rect(tree.row(d.row.level(), i).bg, DRAG_TINT);
         }
-        if let Some((_, b)) = d.target {
+        if let Some((_, b, lv)) = d.target {
             let th = app.px(2.0);
             let y = (tree.y(b) - th / 2.0).clamp(tree.area.y, tree.area.y + tree.area.h - th);
-            let t = tree.row(0, b);
+            let t = tree.row(lv, b);
             p.rect(R { x: t.icon.x, y, w: t.bg.x + t.bg.w - t.icon.x, h: th }, ACCENT);
         }
     }
@@ -500,8 +499,8 @@ fn agents(app: &App, p: &mut Painter) {
                 }
                 let mut end = t.right - dd - app.px(8.0);
                 end = p.text_right(&ago(pn.since()), end, r, 11.0, FAINT, false) - app.px(8.0);
-                // "location · title": location is the workspace, or the branch of a linked worktree.
-                let (proj, wt) = app.names(&pn.view);
+                // "location · title": location is the project, or the branch of a linked worktree.
+                let (_, proj, wt) = app.names(&pn.view);
                 let place = if is_default_branch(&wt) || wt == proj { proj } else { wt };
                 let dim = g == Group::Idle && !is_focus;
                 let left = left + agent_icon(app, p, pn, left, r);

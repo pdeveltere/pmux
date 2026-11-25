@@ -212,16 +212,15 @@ impl App {
     pub(super) fn spawn_pane(&mut self, view: &Path, cwd: &Path, new_tab: bool) -> Result<u32, String> {
         let id = self.next_id;
         self.next_id += 1;
-        let (ws, wt) = self.names(view);
+        let (ws, proj, wt) = self.names(view);
         let env = [
             ("PMUX", "1".to_string()),
             ("PMUX_SOCKET", self.socket.display().to_string()),
             // For agent hooks (`pmux integration install claude`): this pmux, wherever it's installed.
             ("PMUX_BIN", std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|_| "pmux".into())),
             ("PMUX_PANE", format!("%{id}")),
-            // PMUX_PROJECT: the old name for the workspace, kept for scripts and older holders.
-            ("PMUX_WORKSPACE", ws.clone()),
-            ("PMUX_PROJECT", ws),
+            ("PMUX_WORKSPACE", ws),
+            ("PMUX_PROJECT", proj),
             ("PMUX_WORKTREE", wt),
         ];
         // Size it as it will be laid out, so the shell starts at the right width.

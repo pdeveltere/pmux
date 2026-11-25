@@ -1,6 +1,6 @@
 //! Tabs follow their terminal into another worktree (c11's "the folder is the truth", applied to
 //! pmux's tree): when a pane's shell `cd`s, or its agent moves (`cd`, `EnterWorktree`), into
-//! another worktree of the same workspace, its tab moves there. A pane split beside others moves
+//! another worktree of the same project, its tab moves there. A pane split beside others moves
 //! out into a tab of its own.
 use super::{App, Tab};
 use crate::hold::Moved;
@@ -14,9 +14,9 @@ impl App {
         self.move_pane(id, to);
     }
 
-    /// The worktree `dir` is in, if it's another one of the workspace `from` belongs to.
+    /// The worktree `dir` is in, if it's another one of the project `from` belongs to.
     fn follow_target(&self, from: &Path, dir: &Path) -> Option<PathBuf> {
-        let views = self.workspaces.iter().map(|p| p.view_paths()).find(|v| v.iter().any(|x| x == from))?;
+        let views = self.projects().map(|p| p.view_paths()).find(|v| v.iter().any(|x| x == from))?;
         let to = views.into_iter().filter(|v| dir.starts_with(v)).max_by_key(|v| v.as_os_str().len())?;
         (to != from).then_some(to)
     }
@@ -35,9 +35,8 @@ impl App {
         if followed {
             v.tab = v.tabs.len() - 1;
         }
-        let (ws, wt) = self.names(&to);
-        // PMUX_PROJECT: the old name for the workspace, still read by `pmux ls` in an older holder.
-        let env = vec![("PMUX_WORKSPACE".into(), ws.clone()), ("PMUX_PROJECT".into(), ws), ("PMUX_WORKTREE".into(), wt.clone())];
+        let (ws, proj, wt) = self.names(&to);
+        let env = vec![("PMUX_WORKSPACE".into(), ws), ("PMUX_PROJECT".into(), proj), ("PMUX_WORKTREE".into(), wt.clone())];
         if let Some(l) = &self.hold {
             l.moved(id, &Moved { view: to.clone(), env });
         }

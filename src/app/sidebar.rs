@@ -1,5 +1,5 @@
-//! Sidebar: the workspace → worktree tree, its keys, reordering, adding and closing.
-use super::{subtree_end, ws_key, App, Close, Ev, Focus, Prompt, PromptKind, Removal, Row, Workspace};
+//! Sidebar: the workspace → project → worktree tree, its keys, reordering, adding and closing.
+use super::{proj_key, subtree_end, ws_key, App, Close, Drop, Ev, Focus, Project, Prompt, PromptKind, Removal, Row, Workspace};
 use crate::api::Reply;
 use crate::{config, git, input, util};
 use std::path::{Path, PathBuf};
@@ -12,25 +12,37 @@ impl App {
         let mut out = Vec::new();
         for (wi, ws) in self.workspaces.iter().enumerate() {
             out.push(Row::Ws(wi));
-            if !self.folded.contains(&ws_key(&ws.path)) {
-                out.extend(ws.listed().map(|(ti, _)| Row::Wt(wi, ti)));
+            if self.folded.contains(&ws_key(&ws.name)) {
+                continue;
+            }
+            for (pi, p) in ws.projects.iter().enumerate() {
+                out.push(Row::Proj(wi, pi));
+                if !self.folded.contains(&proj_key(&p.path)) {
+                    out.extend(p.listed().map(|(ti, _)| Row::Wt(wi, pi, ti)));
+                }
             }
         }
         out
     }
 
-    /// The view a row opens.
+    pub(super) fn project(&self, w: usize, p: usize) -> &Project {
+        &self.workspaces[w].projects[p]
+    }
+
+    /// The view a row opens; workspaces have none.
     pub fn row_view(&self, r: Row) -> Option<PathBuf> {
         match r {
-            Row::Ws(w) => Some(self.workspaces[w].path.clone()),
-            Row::Wt(w, t) => Some(self.workspaces[w].worktrees.as_ref()?[t].path.clone()),
+            Row::Proj(wi, pi) => Some(self.project(wi, pi).path.clone()),
+            Row::Wt(wi, pi, ti) => Some(self.project(wi, pi).worktrees.as_ref()?[ti].path.clone()),
+            Row::Ws(_) => None,
         }
     }
 
-    /// The fold key of a row that can fold: a workspace with worktrees listed under it.
+    /// The fold key of a row that can fold.
     fn fold_key(&self, row: Row) -> Option<String> {
         match row {
-            Row::Ws(w) if self.workspaces[w].has_linked() => Some(ws_key(&self.workspaces[w].path)),
+            Row::Ws(w) => Some(ws_key(&self.workspaces[w].name)),
+            Row::Proj(w, p) if self.project(w, p).has_linked() => Some(proj_key(&self.project(w, p).path)),
             _ => None,
         }
     }
@@ -38,7 +50,8 @@ impl App {
     fn row_valid(&self, row: Row) -> bool {
         match row {
             Row::Ws(w) => w < self.workspaces.len(),
-            Row::Wt(w, t) => self.workspaces.get(w).and_then(|ws| ws.worktrees.as_ref()).is_some_and(|v| t < v.len()),
+            Row::Proj(w, p) => self.workspaces.get(w).is_some_and(|ws| p < ws.projects.len()),
+            Row::Wt(w, p, t) => self.workspaces.get(w).and_then(|ws| ws.projects.get(p)).and_then(|pr| pr.worktrees.as_ref()).is_some_and(|v| t < v.len()),
         }
     }
 
@@ -48,21 +61,49 @@ impl App {
         }
     }
 
-    /// The workspace at `path`.
-    pub(super) fn ws_index(&self, path: &Path) -> Option<usize> {
-        self.workspaces.iter().position(|w| w.path == path)
+    /// Workspace by name.
+    pub(super) fn ws_index(&self, name: &str) -> Option<usize> {
+        self.workspaces.iter().position(|w| w.name == name)
     }
 
-    /// The workspace `t` names: its folder (`~/` allowed) or its name.
-    pub(super) fn find_workspace(&self, t: &str) -> Option<PathBuf> {
-        let path = std::fs::canonicalize(config::expand(t)).ok();
-        self.workspaces.iter().find(|w| Some(&w.path) == path.as_ref() || w.name == t).map(|w| w.path.clone())
+    /// (workspace, project) of the project at `path`.
+    pub(super) fn proj_index(&self, path: &Path) -> Option<(usize, usize)> {
+        self.workspaces.iter().enumerate().find_map(|(w, ws)| ws.projects.iter().position(|p| p.path == path).map(|p| (w, p)))
     }
 
-    /// Click (or release without a drag): open the row's view.
+    /// The close target for a workspace or project row.
+    fn close_of(&self, row: Row) -> Option<Close> {
+        match row {
+            Row::Ws(w) => Some(Close::Workspace(self.workspaces[w].name.clone())),
+            Row::Proj(w, p) => Some(Close::Project(self.project(w, p).path.clone())),
+            Row::Wt(..) => None,
+        }
+    }
+
+    /// The workspace of the selected row.
+    fn selected_ws(&self) -> Option<usize> {
+        self.rows().get(self.sel).map(|r| r.ws())
+    }
+
+    /// The workspace holding a view.
+    pub(super) fn ws_of(&self, view: &Path) -> Option<usize> {
+        let name = self.names(view).0;
+        self.workspaces.iter().position(|w| w.name == name)
+    }
+
+    /// Click (or release without a drag): open the row's view, or fold a workspace.
     pub(super) fn click_row(&mut self, row: Row) {
-        if let Some(v) = self.row_valid(row).then(|| self.row_view(row)).flatten() {
-            self.open_view(v);
+        if !self.row_valid(row) {
+            return;
+        }
+        match self.row_view(row) {
+            Some(v) => self.open_view(v),
+            None => {
+                if let Some(k) = self.fold_key(row) {
+                    self.toggle_fold(k);
+                }
+                self.focus = Focus::Sidebar;
+            }
         }
     }
 
@@ -70,7 +111,7 @@ impl App {
         let rows = self.rows();
         if rows.is_empty() {
             match ch {
-                Some('a' | 'W') => self.prompt_add_workspace(),
+                Some('W') => self.prompt_new_workspace(),
                 Some('q') => self.quit = true,
                 _ => {}
             }
@@ -89,14 +130,21 @@ impl App {
         } else if is(NamedKey::ArrowRight, 'l') && folded {
             self.toggle_fold(fold_key.unwrap());
         } else if is(NamedKey::ArrowRight, 'l') || named == Some(NamedKey::Enter) {
-            if let Some(v) = self.row_view(row) {
-                self.open_view(v);
+            // Enter opens, or folds/unfolds a workspace; → only unfolds (handled above).
+            match self.row_view(row) {
+                Some(v) => self.open_view(v),
+                None => {
+                    if let Some(f) = fold_key.filter(|_| named == Some(NamedKey::Enter)) {
+                        self.toggle_fold(f);
+                    }
+                }
             }
         } else if is(NamedKey::ArrowLeft, 'h') {
             // ← folds, or goes to the parent row.
             match (row, fold_key) {
                 (_, Some(f)) if !folded => self.toggle_fold(f),
-                (Row::Wt(w, _), _) => self.select_row(Row::Ws(w)),
+                (Row::Proj(w, _), _) => self.select_row(Row::Ws(w)),
+                (Row::Wt(w, p, _), _) => self.select_row(Row::Proj(w, p)),
                 _ => {}
             }
         } else if matches!(named, Some(NamedKey::Escape | NamedKey::Tab)) {
@@ -104,13 +152,19 @@ impl App {
                 self.focus = Focus::Panes;
             }
         } else {
-            let ws = &self.workspaces[row.ws()];
             match (ch, row) {
-                (Some('a' | 'W'), _) => self.prompt_add_workspace(),
-                (Some('w'), _) if ws.worktrees.is_some() => self.prompt_new_worktree(ws.path.clone()),
-                (Some('w'), _) => self.say("not a git repo"),
-                (Some('x'), Row::Wt(..)) => self.say("x closes a workspace; right-click deletes a worktree"),
-                (Some('x'), Row::Ws(_)) => self.request_close(Close::Workspace(ws.path.clone())),
+                (Some('a'), _) => self.prompt_add_project(Some(row.ws())),
+                (Some('W'), _) => self.prompt_new_workspace(),
+                (Some('w'), Row::Proj(w, p) | Row::Wt(w, p, _)) if self.project(w, p).worktrees.is_some() => {
+                    self.prompt_new_worktree(self.project(w, p).path.clone())
+                }
+                (Some('w'), _) => self.say("not a git project"),
+                (Some('x'), Row::Wt(..)) => self.say("x closes a project or workspace; right-click deletes a worktree"),
+                (Some('x'), _) => {
+                    if let Some(c) = self.close_of(row) {
+                        self.request_close(c);
+                    }
+                }
                 (Some('q'), _) => self.quit = true,
                 _ => {}
             }
@@ -119,9 +173,9 @@ impl App {
 
     // ---- reorder by drag ----
 
-    /// Where a workspace dragged to screen y lands: (insertion index before removal, row
-    /// boundary the indicator line sits on).
-    pub(super) fn drop_target(&self, y: f32) -> Option<(usize, usize)> {
+    /// Drop target for dragging `row` with the mouse at screen y: workspaces reorder among themselves,
+    /// projects reorder within or move across workspaces.
+    pub(super) fn drop_target(&self, row: Row, y: f32) -> Option<(Drop, usize, usize)> {
         let rows = self.rows();
         let n = rows.len();
         if n == 0 {
@@ -129,57 +183,131 @@ impl App {
         }
         let pos = self.sidebar_tree(n).pos_at(y);
         let idx = (pos.floor().max(0.0) as usize).min(n - 1);
-        // The block under the mouse: a workspace row plus its worktrees.
-        let w = rows[idx].ws();
-        let start = rows.iter().position(|r| *r == Row::Ws(w))?;
-        let end = subtree_end(&rows, start);
-        Some(if pos < (start + end) as f32 / 2.0 { (w, start) } else { (w + 1, end) })
+        // Row block [start, end): the row plus everything nested under it.
+        let block = |start: usize| (start, subtree_end(&rows, start));
+        let before = |(s, e): (usize, usize)| pos < (s + e) as f32 / 2.0;
+        match row {
+            Row::Ws(_) => {
+                let w = rows[idx].ws();
+                let b = block(rows.iter().position(|r| *r == Row::Ws(w))?);
+                Some(if before(b) { (Drop::Ws(w), b.0, 0) } else { (Drop::Ws(w + 1), b.1, 0) })
+            }
+            Row::Proj(..) => match rows[idx] {
+                // Upper half of a workspace row: end of the workspace above; lower half: top of this one.
+                Row::Ws(w) if w > 0 && pos < idx as f32 + 0.5 => Some((Drop::Proj(w - 1, self.workspaces[w - 1].projects.len()), idx, 1)),
+                Row::Ws(w) => Some((Drop::Proj(w, 0), idx + 1, 1)),
+                Row::Proj(w, p) | Row::Wt(w, p, _) => {
+                    let b = block(rows.iter().position(|r| *r == Row::Proj(w, p))?);
+                    Some(if before(b) { (Drop::Proj(w, p), b.0, 1) } else { (Drop::Proj(w, p + 1), b.1, 1) })
+                }
+            },
+            Row::Wt(..) => None,
+        }
     }
 
-    pub(super) fn drop_row(&mut self, row: Row, to: usize) {
-        let Row::Ws(from) = row else { return };
-        if !self.row_valid(row) || to > self.workspaces.len() {
+    pub(super) fn drop_row(&mut self, row: Row, to: Drop) {
+        if !self.row_valid(row) {
             return;
         }
-        let ws = self.workspaces.remove(from);
-        let to = if to > from { to - 1 } else { to };
-        self.workspaces.insert(to, ws);
-        self.select_row(Row::Ws(to));
+        let moved = match (row, to) {
+            (Row::Ws(from), Drop::Ws(to)) if to <= self.workspaces.len() => {
+                let ws = self.workspaces.remove(from);
+                let to = if to > from { to - 1 } else { to };
+                self.workspaces.insert(to, ws);
+                Row::Ws(to)
+            }
+            (Row::Proj(fw, fp), Drop::Proj(tw, tp)) if tw < self.workspaces.len() && tp <= self.workspaces[tw].projects.len() => {
+                let path = &self.project(fw, fp).path;
+                if tw != fw && self.workspaces[tw].projects.iter().any(|p| &p.path == path) {
+                    return self.say(format!("already in workspace {}", self.workspaces[tw].name));
+                }
+                let pr = self.workspaces[fw].projects.remove(fp);
+                let tp = if tw == fw && tp > fp { tp - 1 } else { tp };
+                self.workspaces[tw].projects.insert(tp, pr);
+                Row::Proj(tw, tp)
+            }
+            _ => return,
+        };
+        self.select_row(moved);
         self.save();
         self.dirty = true;
     }
 
     // ---- adding ----
 
-    pub(super) fn prompt_add_workspace(&mut self) {
-        self.prompt = Some(Prompt::new(PromptKind::AddWorkspace, "Add workspace folder", "~/"));
+    pub(super) fn prompt_new_workspace(&mut self) {
+        self.prompt = Some(Prompt::new(PromptKind::NewWorkspace, "New workspace", ""));
     }
 
-    pub(super) fn prompt_new_worktree(&mut self, ws: PathBuf) {
-        self.prompt = Some(Prompt::new(PromptKind::NewWorktree(ws), "New worktree branch", ""));
+    pub(super) fn prompt_new_worktree(&mut self, project: PathBuf) {
+        self.prompt = Some(Prompt::new(PromptKind::NewWorktree(project), "New worktree branch", ""));
     }
 
-    /// The header's +: a workspace at `~`, opened right away (it's just opened if it's there).
-    pub(super) fn add_home_workspace(&mut self) {
-        let home = std::fs::canonicalize(config::home()).unwrap_or_else(|_| config::home());
-        if self.ws_index(&home).is_none() {
-            if let Err(e) = self.add_workspace(&home.display().to_string()) {
-                return self.say(e);
+    pub(super) fn prompt_rename_workspace(&mut self, name: String) {
+        if self.ws_index(&name).is_none() {
+            return self.say(format!("workspace {name} no longer exists"));
+        }
+        self.prompt = Some(Prompt::new(PromptKind::RenameWorkspace(name.clone()), "Rename workspace", &name));
+    }
+
+    /// Add a project to workspace `w` (default: the selected row's workspace, else the last one).
+    pub(super) fn prompt_add_project(&mut self, w: Option<usize>) {
+        let w = match w.or_else(|| self.selected_ws()).or(self.workspaces.len().checked_sub(1)) {
+            Some(w) => w,
+            None => {
+                // No workspace yet: make one so the project has a home.
+                self.workspaces.push(Workspace { name: "default".into(), projects: vec![] });
+                self.save();
+                0
             }
-        }
-        self.open_view(home);
+        };
+        let name = self.workspaces[w].name.clone();
+        self.prompt = Some(Prompt::new(PromptKind::AddProject(name.clone()), format!("Add project to {name}"), "~/"));
     }
 
-    /// Add folder `dir` as a workspace; its name on success.
-    pub(super) fn add_workspace(&mut self, dir: &str) -> Result<String, String> {
-        let Some(ws) = Workspace::open(&config::expand(dir.trim())) else { return Err(format!("not a directory: {dir}")) };
-        if let Some(w) = self.ws_index(&ws.path) {
-            self.select_row(Row::Ws(w));
-            return Err(format!("{} is already a workspace", ws.name));
+    /// A workspace name that's not empty and not taken (except by workspace `except`).
+    fn check_ws_name<'a>(&self, name: &'a str, except: Option<usize>) -> Result<&'a str, String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("workspace name is empty".into());
         }
-        let name = ws.name.clone();
-        self.workspaces.push(ws);
-        self.select_row(Row::Ws(self.workspaces.len() - 1));
+        if self.workspaces.iter().enumerate().any(|(i, ws)| Some(i) != except && ws.name == name) {
+            return Err(format!("workspace {name} already exists"));
+        }
+        Ok(name)
+    }
+
+    pub(super) fn add_workspace(&mut self, name: &str) -> Result<(), String> {
+        let name = self.check_ws_name(name, None)?;
+        self.workspaces.push(Workspace { name: name.into(), projects: vec![] });
+        self.sel = self.rows().len() - 1;
+        self.save();
+        self.dirty = true;
+        Ok(())
+    }
+
+    pub(super) fn rename_workspace(&mut self, w: usize, name: &str) -> Result<(), String> {
+        let name = self.check_ws_name(name, Some(w))?;
+        let old = std::mem::replace(&mut self.workspaces[w].name, name.into());
+        if self.folded.remove(&ws_key(&old)) {
+            self.folded.insert(ws_key(name));
+        }
+        self.save();
+        Ok(())
+    }
+
+    pub(super) fn add_project(&mut self, w: usize, dir: &str) -> Result<String, String> {
+        let Some(proj) = Project::open(&config::expand(dir.trim())) else { return Err(format!("not a directory: {dir}")) };
+        if w >= self.workspaces.len() {
+            return Err("no such workspace".into());
+        }
+        if let Some(ws) = self.workspaces.iter().find(|ws| ws.projects.iter().any(|p| p.path == proj.path)) {
+            return Err(format!("{} is already in workspace {}", proj.name, ws.name));
+        }
+        let name = proj.name.clone();
+        self.workspaces[w].projects.push(proj);
+        self.folded.remove(&ws_key(&self.workspaces[w].name));
+        self.select_row(Row::Proj(w, self.workspaces[w].projects.len() - 1));
         self.save();
         self.rewatch();
         self.dirty = true;
@@ -188,11 +316,11 @@ impl App {
 
     /// Create a worktree for a new or existing branch, off the UI thread (a checkout of a big
     /// repo takes a while); `Ev::WorktreeAdded` opens it.
-    pub(super) fn add_worktree(&mut self, ws: &Path, branch: &str) {
+    pub(super) fn add_worktree(&mut self, project: &Path, branch: &str) {
         self.say(format!("creating worktree {branch}..."));
-        let (tx, ws, branch) = (self.tx.clone(), ws.to_path_buf(), branch.to_string());
+        let (tx, project, branch) = (self.tx.clone(), project.to_path_buf(), branch.to_string());
         std::thread::spawn(move || {
-            let _ = tx.send_event(Ev::WorktreeAdded(git::add(&ws, &branch)));
+            let _ = tx.send_event(Ev::WorktreeAdded(git::add(&project, &branch)));
         });
     }
 
@@ -206,16 +334,21 @@ impl App {
         }
     }
 
-    // ---- closing (a workspace: sidebar only, files are never touched) ----
+    // ---- closing (workspaces / projects: sidebar only, files are never touched) ----
 
     /// (display name, views it covers, panes open in them); `None` when it's gone from the sidebar.
     pub(super) fn close_info(&self, c: &Close) -> Option<(String, Vec<PathBuf>, usize)> {
         let (name, paths) = match c {
-            Close::Workspace(path) => {
-                let ws = &self.workspaces[self.ws_index(path)?];
-                (format!("workspace {}", ws.name), ws.view_paths())
+            Close::Workspace(n) => {
+                let ws = &self.workspaces[self.ws_index(n)?];
+                (format!("workspace {}", ws.name), ws.projects.iter().flat_map(Project::view_paths).collect())
             }
-            Close::Worktree(_, wt) => (format!("worktree {}", self.names(wt).1), vec![wt.clone()]),
+            Close::Project(path) => {
+                let (w, p) = self.proj_index(path)?;
+                let pr = self.project(w, p);
+                (format!("project {}", pr.name), pr.view_paths())
+            }
+            Close::Worktree(_, wt) => (format!("worktree {}", self.names(wt).2), vec![wt.clone()]),
         };
         let n = paths.iter().map(|v| self.panes_in(v).len()).sum();
         Some((name, paths, n))
@@ -223,15 +356,17 @@ impl App {
 
     /// Close right away if nothing would be lost, otherwise ask first:
     /// - a workspace asks when panes run in it;
+    /// - a project never asks (only the sidebar row goes; files stay);
     /// - a worktree never asks: it's removed with `--force`, uncommitted and untracked files and all.
     pub(super) fn request_close(&mut self, c: Close) {
         let Some((name, _, n)) = self.close_info(&c) else { return self.say("that's no longer in the sidebar") };
         match c {
             Close::Worktree(_, wt) if self.removing.contains(&wt) => self.say(format!("already deleting {name}")),
             Close::Worktree(proj, wt) => self.start_removal(Removal { proj, wt, name, force: true, reply: None, auto: None }),
+            c @ Close::Project(..) => self.close(c),
             c if n == 0 => self.close(c),
             c => {
-                let label = format!("Close {name} and its {}? Files stay on disk. y/n", util::plural(n, "pane"));
+                let label = format!("Delete {name} and close its {}? Files stay on disk. y/n", util::plural(n, "pane"));
                 self.prompt = Some(Prompt::new(PromptKind::Confirm(c), label, ""));
             }
         }
@@ -243,13 +378,18 @@ impl App {
         match c {
             // Off the UI thread: removing a big checkout takes a while. The row stays until done.
             Close::Worktree(proj, wt) => self.start_removal(Removal { proj, wt, name, force: true, reply: None, auto: None }),
-            Close::Workspace(path) => {
-                if let Some(w) = self.ws_index(&path) {
+            Close::Workspace(n) => {
+                if let Some(w) = self.ws_index(&n) {
                     let ws = self.workspaces.remove(w);
-                    self.folded.remove(&ws_key(&ws.path));
-                    self.save();
-                    self.rewatch();
-                    self.say(format!("closed {name}"));
+                    self.folded.remove(&ws_key(&ws.name));
+                    self.closed_tree(format!("deleted {name} from pmux"));
+                }
+            }
+            Close::Project(path) => {
+                if let Some((w, p)) = self.proj_index(&path) {
+                    let pr = self.workspaces[w].projects.remove(p);
+                    self.folded.remove(&proj_key(&pr.path));
+                    self.closed_tree(format!("closed {name}"));
                 }
             }
         }
@@ -324,5 +464,12 @@ impl App {
         self.reload_git();
         self.sel = self.sel.min(self.rows().len().saturating_sub(1));
         self.dirty = true;
+    }
+
+    /// After removing a workspace or project from the tree.
+    fn closed_tree(&mut self, msg: String) {
+        self.save();
+        self.rewatch();
+        self.say(msg);
     }
 }

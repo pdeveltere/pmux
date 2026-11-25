@@ -31,13 +31,13 @@ impl App {
     }
 
     fn pane_line(&self, p: &Pane, me: Option<u32>) -> String {
-        let (ws, wt) = self.names(&p.view);
-        format!("%{:<3} {:<8} {:<8} {:<36} {}{}", p.id, p.kind(), state_str(p), format!("{ws}/{wt}"), p.label(), here(p.id, me))
+        let (ws, proj, wt) = self.names(&p.view);
+        format!("%{:<3} {:<8} {:<8} {:<36} {}{}", p.id, p.kind(), state_str(p), format!("{ws}/{proj}/{wt}"), p.label(), here(p.id, me))
     }
 
     /// Ask-free close for the API: refuses while panes are open unless forced.
     fn api_close(&mut self, c: Close, force: bool) -> Reply {
-        let Some((name, _, n)) = self.close_info(&c) else { return Reply::err("no such workspace") };
+        let Some((name, _, n)) = self.close_info(&c) else { return Reply::err("no such workspace or project") };
         if n > 0 && !force {
             return Reply::err(format!("{name} has {n} open pane(s); add --force to close them"));
         }
@@ -104,38 +104,59 @@ impl App {
                 }
                 None => Reply::err("not inside a pmux pane"),
             },
-            // `project add/rm`: the old names, from when workspaces grouped projects.
-            ["ws" | "project", "add" | "new", dir, ..] => match self.add_workspace(dir) {
-                Ok(name) => Reply::ok(format!("added workspace {name}")),
+            ["ws", "new", name @ ..] if !name.is_empty() => match self.add_workspace(&name.join(" ")) {
+                Ok(()) => Reply::ok(""),
                 Err(e) => Reply::err(e),
             },
-            ["ws" | "project", "rm", t, ..] => match self.find_workspace(t) {
-                Some(p) => self.api_close(Close::Workspace(p), force),
-                None => Reply::err(format!("no workspace {t}")),
+            ["ws", "rm", name, ..] => match self.ws_index(name) {
+                Some(_) => self.api_close(Close::Workspace(name.to_string()), force),
+                None => Reply::err(format!("no workspace {name}")),
             },
+            ["project", "add", dir, rest @ ..] => {
+                let w = match rest {
+                    ["-w", ws, ..] => self.workspaces.iter().position(|w| w.name == *ws),
+                    _ => me.and_then(|id| self.panes.get(&id)).and_then(|p| self.ws_of(&p.view)).or(self.workspaces.len().checked_sub(1)),
+                };
+                let Some(w) = w else { return Reply::err("no such workspace (create one: pmux ws new <name>)") };
+                match self.add_project(w, dir) {
+                    Ok(name) => Reply::ok(format!("added {name} to {}", self.workspaces[w].name)),
+                    Err(e) => Reply::err(e),
+                }
+            }
+            ["project", "rm", t, ..] => {
+                let path = std::fs::canonicalize(config::expand(t)).ok();
+                let hit = self.projects().find(|p| Some(&p.path) == path.as_ref() || p.name == *t).map(|p| p.path.clone());
+                match hit {
+                    Some(p) => self.api_close(Close::Project(p), force),
+                    None => Reply::err(format!("no project {t}")),
+                }
+            }
             _ => Reply::err(format!("unknown command: {} (see pmux --help)", a.join(" "))),
         }
     }
 
-    /// `pmux tree`: workspaces, their worktrees, and their panes.
+    /// `pmux tree`: workspaces, projects, worktrees and their panes.
     fn tree(&self, me: Option<u32>) -> String {
         let mut s = String::new();
         for ws in &self.workspaces {
-            s += &format!("{}  {}\n", ws.name, config::tilde(&ws.path));
-            let mut views: Vec<(String, PathBuf)> = ws.listed().map(|(_, t)| (t.branch.clone(), t.path.clone())).collect();
-            if !views.iter().any(|(_, v)| *v == ws.path) {
-                views.insert(0, (String::new(), ws.path.clone()));
-            }
-            for (branch, path) in views {
-                let ind = if branch.is_empty() {
-                    "  "
-                } else {
-                    s += &format!("  {}  {}\n", branch, config::tilde(&path));
-                    "    "
-                };
-                for id in self.panes_in(&path) {
-                    let pn = &self.panes[&id];
-                    s += &format!("{ind}%{} {} [{}] {}{}\n", id, pn.kind(), state_str(pn), pn.label(), here(id, me));
+            s += &format!("{}\n", ws.name);
+            for p in &ws.projects {
+                s += &format!("  {}  {}\n", p.name, config::tilde(&p.path));
+                let mut views: Vec<(String, PathBuf)> = p.listed().map(|(_, t)| (t.branch.clone(), t.path.clone())).collect();
+                if !views.iter().any(|(_, v)| *v == p.path) {
+                    views.insert(0, (String::new(), p.path.clone()));
+                }
+                for (branch, path) in views {
+                    let ind = if branch.is_empty() {
+                        "    "
+                    } else {
+                        s += &format!("    {}  {}\n", branch, config::tilde(&path));
+                        "      "
+                    };
+                    for id in self.panes_in(&path) {
+                        let pn = &self.panes[&id];
+                        s += &format!("{ind}%{} {} [{}] {}{}\n", id, pn.kind(), state_str(pn), pn.label(), here(id, me));
+                    }
                 }
             }
         }
@@ -188,13 +209,13 @@ impl App {
             let _ = rtx.send(Reply::err(m));
         };
         let path = std::fs::canonicalize(config::expand(t)).ok();
-        let hit = self.workspaces.iter().find_map(|p| p.worktrees.iter().flatten().find(|w| !w.main && Some(&w.path) == path.as_ref()).map(|w| (p.path.clone(), w.path.clone())));
+        let hit = self.projects().find_map(|p| p.worktrees.iter().flatten().find(|w| !w.main && Some(&w.path) == path.as_ref()).map(|w| (p.path.clone(), w.path.clone())));
         let Some((proj, wt)) = hit else { return refuse(format!("no linked worktree at {t}")) };
         let n = self.panes_in(&wt).len();
         if n > 0 && !force {
             return refuse(format!("worktree has {n} open pane(s); add --force"));
         }
-        let name = format!("worktree {}", self.names(&wt).1);
+        let name = format!("worktree {}", self.names(&wt).2);
         if self.removing.contains(&wt) {
             return refuse(format!("already deleting {name}"));
         }

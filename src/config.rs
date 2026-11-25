@@ -1,4 +1,4 @@
-//! The sidebar's workspaces (one folder each), persisted as TOML in `~/.config/pmux/workspaces.toml`.
+//! The sidebar's workspaces and projects, persisted as TOML in `~/.config/pmux/workspaces.toml`.
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -6,34 +6,16 @@ use std::path::{Path, PathBuf};
 /// The whole config file.
 #[derive(Serialize, Deserialize, Default)]
 pub struct Config {
-    /// Workspace folders, in sidebar order (`~`-relative where possible).
     #[serde(default)]
-    pub workspaces: Vec<String>,
-    /// The old format: named groups of project folders. Read once and flattened into `workspaces`.
-    #[serde(default, skip_serializing)]
-    workspace: Vec<OldWs>,
+    pub workspace: Vec<WsCfg>,
 }
 
-#[derive(Deserialize)]
-struct OldWs {
+/// One workspace: a name and its project directories (`~`-relative where possible).
+#[derive(Serialize, Deserialize)]
+pub struct WsCfg {
+    pub name: String,
     #[serde(default)]
-    projects: Vec<String>,
-}
-
-impl Config {
-    pub fn new(workspaces: Vec<String>) -> Self {
-        Config { workspaces, workspace: vec![] }
-    }
-
-    /// Flatten old-format groups: each project becomes a workspace.
-    fn migrate(&mut self) {
-        let old = std::mem::take(&mut self.workspace);
-        for p in old.into_iter().flat_map(|w| w.projects) {
-            if !self.workspaces.contains(&p) {
-                self.workspaces.push(p);
-            }
-        }
-    }
+    pub projects: Vec<String>,
 }
 
 /// `$HOME`, or `/` when unset.
@@ -54,14 +36,7 @@ pub fn load() -> Result<Option<Config>, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("{}: {e}", p.display())),
     };
-    let mut c: Config = toml::from_str(&s).map_err(|e| format!("{}: {e}", p.display()))?;
-    if !c.workspace.is_empty() {
-        // Keep the old file around once, then write the new format.
-        let _ = fs::copy(&p, p.with_extension("toml.old"));
-        c.migrate();
-        save(&c);
-    }
-    Ok(Some(c))
+    toml::from_str(&s).map(Some).map_err(|e| format!("{}: {e}", p.display()))
 }
 
 /// Write the config atomically (temp file + rename), so a crash never leaves it half written.
@@ -92,16 +67,5 @@ pub fn tilde(p: &Path) -> String {
     match p.strip_prefix(home()) {
         Ok(r) => format!("~/{}", r.display()),
         Err(_) => p.display().to_string(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn migrates_old_groups() {
-        let mut c: super::Config = toml::from_str("[[workspace]]\nname = \"a\"\nprojects = [\"~/x\", \"~/y\"]\n[[workspace]]\nname = \"b\"\nprojects = [\"~/y\", \"/z\"]\n").unwrap();
-        c.migrate();
-        assert_eq!(c.workspaces, ["~/x", "~/y", "/z"]);
-        assert_eq!(toml::to_string(&c).unwrap(), "workspaces = [\"~/x\", \"~/y\", \"/z\"]\n");
     }
 }
