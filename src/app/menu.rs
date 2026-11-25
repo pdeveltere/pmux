@@ -14,6 +14,7 @@ impl App {
                 let name = self.workspaces[w].name.clone();
                 vec![
                     item("New project…", Action::AddProject(Some(name.clone()))),
+                    item("Rename…", Action::RenameWorkspace(name.clone())),
                     fold(self, ws_key(&name)),
                     sep(),
                     item("Close", Action::Delete(Close::Workspace(name))),
@@ -99,6 +100,7 @@ impl App {
                 None => self.say(format!("workspace {name} no longer exists")),
             },
             Action::NewWorkspace => self.prompt_new_workspace(),
+            Action::RenameWorkspace(name) => self.prompt_rename_workspace(name),
             Action::Toggle(key) => self.toggle_fold(key),
             Action::NewWorktree(p) => self.prompt_new_worktree(p),
             Action::Open(v) => self.open_view(v),
