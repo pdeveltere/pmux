@@ -38,7 +38,8 @@ impl App {
                 let wt = &pr.worktrees.as_ref().expect("row has worktrees")[t];
                 let mut v = vec![item("Open", Action::Open(wt.path.clone()))];
                 v.extend(path_items(&wt.path));
-                if !wt.main {
+                // Not while it's already being deleted: the row says "deleting…".
+                if !wt.main && !self.removing.contains(&wt.path) {
                     v.extend([sep(), item("Delete worktree", Action::Delete(Close::Worktree(pr.path.clone(), wt.path.clone(), false)))]);
                 }
                 v

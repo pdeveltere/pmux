@@ -197,8 +197,8 @@ pub struct App {
     /// One `git status` at a time; `status_again` re-runs it when changes arrived meanwhile.
     status_busy: bool,
     status_again: bool,
-    /// Worktrees being deleted in the background.
-    removing: HashSet<PathBuf>,
+    /// Worktrees being deleted in the background (their sidebar row says so).
+    pub removing: HashSet<PathBuf>,
     /// Linked worktrees whose branch is merged, waiting to be deleted (`merged`).
     pub merged: HashMap<PathBuf, merged::Merged>,
     /// Git state each worktree was last checked for being merged at (`git::merge_key`).

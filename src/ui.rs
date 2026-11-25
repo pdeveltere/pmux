@@ -397,7 +397,8 @@ fn sidebar(app: &App, p: &mut Painter) {
                 let w = &app.workspaces[wi].projects[pi].worktrees.as_ref().expect("row has worktrees")[ti];
                 let panes = app.panes_in(&w.path);
                 behind_of = Some(&w.path);
-                (w.branch.clone(), &icons::BRANCH, if panes.is_empty() { MUTED } else { TEXT }, false, panes)
+                let dim = panes.is_empty() || app.removing.contains(&w.path);
+                (w.branch.clone(), &icons::BRANCH, if dim { MUTED } else { TEXT }, false, panes)
             }
         };
         let r = t.bg;
@@ -414,8 +415,11 @@ fn sidebar(app: &App, p: &mut Painter) {
         if let Some(n) = behind_of.and_then(|v| app.behind.get(v)) {
             label_end = p.text_right(&format!("\u{2193}{n}"), label_end, r, 11.5, BEHIND, false) - app.px(6.0);
         }
+        // Being deleted in the background; it leaves the tree once git is done.
+        if behind_of.is_some_and(|v| app.removing.contains(v)) {
+            label_end = p.text_right("deleting\u{2026}", label_end, r, 11.5, MUTED, false) - app.px(6.0);
         // Merged but not deleted yet (an agent is busy in it, or it has uncommitted files).
-        if behind_of.is_some_and(|v| app.merged.contains_key(v)) {
+        } else if behind_of.is_some_and(|v| app.merged.contains_key(v)) {
             label_end = p.text_right("merged", label_end, r, 11.5, MUTED, false) - app.px(6.0);
         }
         RowLook { icon, icon_color: if current { ACCENT } else { MUTED }, label, label_color: if current { ACCENT } else { fg }, bold: bold || current, label_end }
