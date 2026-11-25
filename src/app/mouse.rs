@@ -126,6 +126,11 @@ impl App {
         if self.finder.is_some() {
             return self.finder_click(b, x, y);
         }
+        // A click away from the status-bar prompt cancels it, like Esc, so it can't leave the
+        // rest of the window unresponsive.
+        if self.prompt.is_some() && !self.status_rect().contains(x, y) {
+            self.prompt = None;
+        }
         let free = self.prompt.is_none();
         if let Some(panel) = self.panel_button_at(x, y) {
             if b == MouseButton::Left {

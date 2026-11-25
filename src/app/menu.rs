@@ -123,7 +123,7 @@ impl App {
                 }
             }
             Action::Delete(c) => self.request_close(c),
-            Action::Sep => {}
+            Action::Cancel | Action::Sep => {}
         }
     }
 }

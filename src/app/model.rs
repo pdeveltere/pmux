@@ -172,6 +172,8 @@ pub enum Action {
     /// Expand/collapse an explorer folder.
     FileToggle(PathBuf),
     Delete(Close),
+    /// Closes the menu, nothing else.
+    Cancel,
     Sep,
 }
 
