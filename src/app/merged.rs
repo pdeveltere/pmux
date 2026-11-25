@@ -26,28 +26,51 @@ pub struct Auto {
 }
 
 impl App {
-    /// Off the UI thread: for each linked worktree in `views` whose branch or default branch
-    /// moved since its last check, work out whether it's merged; `Ev::Merged` reports each.
-    pub(super) fn check_merged(&self, views: &[PathBuf]) {
-        let todo: Vec<(PathBuf, PathBuf, String, Option<String>)> = self
-            .projects()
-            .flat_map(|p| p.worktrees.iter().flatten().map(move |w| (p, w)))
-            .filter(|(_, w)| !w.main && !w.branch.starts_with('@') && !super::model::is_default_branch(&w.branch) && views.contains(&w.path))
-            .map(|(p, w)| (p.path.clone(), w.path.clone(), w.branch.clone(), self.merge_keys.get(&w.path).cloned()))
-            .collect();
-        if todo.is_empty() {
+    /// Off the UI thread, for the worktrees in `views`: read each of their projects' refs once
+    /// (`git::refs`), report behind counts (`Ev::Behind`), then work out whether each linked
+    /// worktree whose branch or default branch moved since its last check is merged
+    /// (`Ev::Merged` reports each).
+    pub(super) fn refresh_refs(&self, views: Vec<PathBuf>) {
+        if views.is_empty() {
             return;
         }
+        // Per project: its worktrees in `views`, with the merge key last checked (`None` in
+        // the outer option: not a candidate for being merged).
+        type Todo = (PathBuf, String, Option<Option<String>>);
+        let todo: Vec<(PathBuf, Vec<Todo>)> = self
+            .projects()
+            .map(|p| {
+                let wts = p.worktrees.iter().flatten().filter(|w| views.contains(&w.path)).map(|w| {
+                    let candidate = !w.main && !w.branch.starts_with('@') && !super::model::is_default_branch(&w.branch);
+                    (w.path.clone(), w.branch.clone(), candidate.then(|| self.merge_keys.get(&w.path).cloned()))
+                });
+                (p.path.clone(), wts.collect::<Vec<_>>())
+            })
+            .filter(|(_, wts)| !wts.is_empty())
+            .collect();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            for (proj, wt, branch, seen) in todo {
-                let Some(key) = git::merge_key(&proj, &branch) else { continue };
-                if seen.as_ref() == Some(&key) {
-                    continue;
-                }
-                let how = git::merged(&proj, &wt, &branch);
-                if tx.send_event(Ev::Merged { proj, wt, branch, key, how }).is_err() {
-                    return;
+            let refs: Vec<git::Refs> = todo.iter().map(|(proj, _)| git::refs(proj)).collect();
+            let behind = todo
+                .iter()
+                .zip(&refs)
+                .flat_map(|((_, wts), r)| wts.iter().map(move |(wt, branch, _)| (wt.clone(), r.behind(branch))))
+                .filter(|(_, n)| *n > 0)
+                .collect();
+            if tx.send_event(Ev::Behind(views, behind)).is_err() {
+                return;
+            }
+            for ((proj, wts), r) in todo.into_iter().zip(&refs) {
+                for (wt, branch, seen) in wts {
+                    let Some(seen) = seen else { continue };
+                    let Some(key) = r.merge_key(&branch) else { continue };
+                    if seen.as_ref() == Some(&key) {
+                        continue;
+                    }
+                    let how = git::merged(&proj, &wt, &branch);
+                    if tx.send_event(Ev::Merged { proj: proj.clone(), wt, branch, key, how }).is_err() {
+                        return;
+                    }
                 }
             }
         });

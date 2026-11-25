@@ -204,33 +204,69 @@ fn read_only(dir: &Path, args: &[&str]) -> Result<String, String> {
     run(dir, &a)
 }
 
-/// The default branch to compare against: local `main`/`master`, and its `origin` copy (a
-/// fetch after a merge on GitHub moves that one first). Pairs of (ref, commit).
-fn bases(project: &Path) -> Vec<(String, String)> {
-    let mut v = Vec::new();
-    for b in ["main", "master"] {
-        for r in [format!("refs/heads/{b}"), format!("refs/remotes/origin/{b}")] {
-            if let Ok(c) = read_only(project, &["rev-parse", "--verify", "--quiet", &r]) {
-                v.push((r, c.trim().to_string()));
-            }
-        }
-        if !v.is_empty() {
-            break;
-        }
-    }
-    v
+/// A project's branches and `origin`'s, read with one `git for-each-ref`: each ref's commit,
+/// and how far each local branch is behind its upstream. One process per project, where a
+/// `rev-parse` per ref and a `rev-list` per worktree took several per worktree.
+#[derive(Default)]
+pub struct Refs {
+    commits: HashMap<String, String>,
+    /// Local branches behind their upstream (only nonzero ones).
+    behind: HashMap<String, u32>,
 }
 
-/// What the merge verdict for `branch` depends on: its tip and the default branch's commits.
-/// Same key, same verdict, so a verdict is only worked out again when this changes.
-pub fn merge_key(project: &Path, branch: &str) -> Option<String> {
-    let tip = read_only(project, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).ok()?;
-    let mut k = tip.trim().to_string();
-    for (_, c) in bases(project) {
-        k.push(' ');
-        k.push_str(&c);
+/// Read `project`'s refs (blocking: call off the UI thread). Empty when git fails.
+pub fn refs(project: &Path) -> Refs {
+    let fmt = "--format=%(refname)%00%(objectname)%00%(upstream:track,nobracket)";
+    Refs::parse(&read_only(project, &["for-each-ref", fmt, "refs/heads", "refs/remotes/origin"]).unwrap_or_default())
+}
+
+impl Refs {
+    /// `for-each-ref` lines: ref, commit and upstream track ("ahead 1, behind 3", "behind 3",
+    /// "gone" or nothing), NUL-separated.
+    fn parse(out: &str) -> Refs {
+        let mut r = Refs::default();
+        for l in out.lines() {
+            let mut f = l.split('\0');
+            let (Some(name), Some(commit)) = (f.next(), f.next()) else { continue };
+            let behind: u32 = f.next().unwrap_or("").split(", ").find_map(|t| t.strip_prefix("behind ")?.parse().ok()).unwrap_or(0);
+            if let Some(b) = name.strip_prefix("refs/heads/").filter(|_| behind > 0) {
+                r.behind.insert(b.to_string(), behind);
+            }
+            r.commits.insert(name.to_string(), commit.to_string());
+        }
+        r
     }
-    Some(k)
+
+    /// The default branch to compare against: local `main`/`master`, and its `origin` copy (a
+    /// fetch after a merge on GitHub moves that one first). Pairs of (ref, commit).
+    fn bases(&self) -> Vec<(String, String)> {
+        for b in ["main", "master"] {
+            let v: Vec<(String, String)> = [format!("refs/heads/{b}"), format!("refs/remotes/origin/{b}")]
+                .into_iter()
+                .filter_map(|r| self.commits.get(&r).map(|c| (r.clone(), c.clone())))
+                .collect();
+            if !v.is_empty() {
+                return v;
+            }
+        }
+        vec![]
+    }
+
+    /// What the merge verdict for `branch` depends on: its tip and the default branch's commits.
+    /// Same key, same verdict, so a verdict is only worked out again when this changes.
+    pub fn merge_key(&self, branch: &str) -> Option<String> {
+        let mut k = self.commits.get(&format!("refs/heads/{branch}"))?.clone();
+        for (_, c) in self.bases() {
+            k.push(' ');
+            k.push_str(&c);
+        }
+        Some(k)
+    }
+
+    /// Commits `branch` is behind its upstream; 0 without one.
+    pub fn behind(&self, branch: &str) -> u32 {
+        self.behind.get(branch).copied().unwrap_or(0)
+    }
 }
 
 /// `git patch-id --stable` of a diff or log: the patch ids, one per commit.
@@ -275,7 +311,7 @@ pub fn merged(project: &Path, wt: &Path, branch: &str) -> Option<Merge> {
     if !own_tip(&log, &tip) {
         return None;
     }
-    let bases = bases(project);
+    let bases = refs(project).bases();
     if bases.iter().any(|(r, _)| read_only(project, &["merge-base", "--is-ancestor", &tip, r]).is_ok()) {
         return Some(Merge::Ancestor);
     }
@@ -302,11 +338,6 @@ fn gh() -> Option<PathBuf> {
     let path = std::env::var_os("PATH").unwrap_or_default();
     let dirs = std::env::split_paths(&path).chain(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from));
     dirs.map(|d| d.join("gh")).find(|p| p.is_file())
-}
-
-/// Commits HEAD is behind its upstream; 0 without one. Read-only: writes nothing under .git.
-pub fn behind(wt: &Path) -> u32 {
-    run(wt, &["--no-optional-locks", "rev-list", "--count", "HEAD..@{u}"]).ok().and_then(|o| o.trim().parse().ok()).unwrap_or(0)
 }
 
 /// `git status` for the repo containing `root`, limited to `root` (blocking: call off the UI thread).
@@ -382,6 +413,31 @@ mod tests {
         commit(&repo, "a.txt", "one\n", "init");
         sh(&repo, &["worktree", "add", "-q", "-b", name, wt.to_str().unwrap()]);
         (tmp, repo, wt)
+    }
+
+    #[test]
+    fn refs_give_merge_keys_and_behind_counts() {
+        let out = "refs/heads/main\0aaa\0behind 2\nrefs/heads/f/x\0bbb\0ahead 1, behind 3\nrefs/heads/g\0ccc\0gone\nrefs/remotes/origin/main\0ddd\0\n";
+        let r = Refs::parse(out);
+        assert_eq!(r.merge_key("f/x").as_deref(), Some("bbb aaa ddd"));
+        assert_eq!(r.merge_key("nope"), None);
+        assert_eq!((r.behind("main"), r.behind("f/x"), r.behind("g"), r.behind("nope")), (2, 3, 0, 0));
+        let master = Refs::parse("refs/heads/master\0m\0\nrefs/heads/b\0t\0\n");
+        assert_eq!(master.merge_key("b").as_deref(), Some("t m"));
+    }
+
+    /// Real git: one `for-each-ref` reads what `rev-parse` and `rev-list` did.
+    #[test]
+    fn refs_read_from_git() {
+        let (tmp, repo, wt) = repo_with_branch("refs");
+        sh(&wt, &["branch", "-q", "--set-upstream-to=main"]);
+        commit(&repo, "b.txt", "two\n", "on main");
+        let r = refs(&repo);
+        let main = run(&repo, &["rev-parse", "main"]).unwrap();
+        let tip = run(&repo, &["rev-parse", "refs"]).unwrap();
+        assert_eq!(r.merge_key("refs"), Some(format!("{} {}", tip.trim(), main.trim())));
+        assert_eq!((r.behind("refs"), r.behind("main")), (1, 0));
+        let _ = fs::remove_dir_all(tmp);
     }
 
     /// A fresh worktree's tip is in main already, but it's new work, not merged work.

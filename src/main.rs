@@ -80,6 +80,9 @@ struct Runner {
     fonts: Option<text::Fonts>,
     /// Reused between frames.
     bufs: ui::FrameBufs,
+    /// The window can't be seen (minimized, covered, on another Space): no frames are drawn
+    /// until it can be, which redraws whatever changed meanwhile.
+    occluded: bool,
 }
 
 impl Runner {
@@ -194,6 +197,10 @@ impl ApplicationHandler<Ev> for Runner {
                 }
                 app.dirty = true;
             }
+            WindowEvent::Occluded(o) => {
+                self.occluded = o;
+                app.dirty |= !o;
+            }
             WindowEvent::ModifiersChanged(m) => app.mods = m.state(),
             WindowEvent::KeyboardInput { event, .. } => app.on_key(&event),
             WindowEvent::CursorMoved { position, .. } => app.on_cursor_moved(position.x as f32, position.y as f32),
@@ -217,10 +224,13 @@ impl ApplicationHandler<Ev> for Runner {
         }
         let Some(w) = self.window.as_ref() else { return };
         if app.dirty {
-            app.dirty = false;
             app.sync_layout();
-            w.set_cursor(app.cursor_icon);
-            w.request_redraw();
+            // Hidden: stay dirty, so becoming visible draws. A `pmux snapshot` still gets its frame.
+            if !self.occluded || app.snapshot.is_some() {
+                app.dirty = false;
+                w.set_cursor(app.cursor_icon);
+                w.request_redraw();
+            }
         }
         // Sleep until the next event, or a time-based state change. No idle ticks.
         el.set_control_flow(match app.next_deadline() {
@@ -257,6 +267,6 @@ fn run() {
             std::process::exit(1);
         }
     };
-    let mut r = Runner { proxy, socket, app: None, window: None, gpu: None, fonts: None, bufs: Default::default() };
+    let mut r = Runner { proxy, socket, app: None, window: None, gpu: None, fonts: None, bufs: Default::default(), occluded: false };
     let _ = el.run_app(&mut r);
 }

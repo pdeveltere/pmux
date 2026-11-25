@@ -58,7 +58,7 @@ pub enum Ev {
     Disk(Vec<PathBuf>),
     /// `git status` for an explorer root finished.
     FileStatus(PathBuf, git::Status),
-    /// Whether linked worktree `wt` is merged, as of git state `key` (`git::merge_key`).
+    /// Whether linked worktree `wt` is merged, as of git state `key` (`git::Refs::merge_key`).
     Merged { proj: PathBuf, wt: PathBuf, branch: String, key: String, how: Option<git::Merge> },
     /// `git worktree remove` finished.
     WorktreeRemoved(Removal, Result<(), String>),
@@ -201,7 +201,7 @@ pub struct App {
     pub removing: HashSet<PathBuf>,
     /// Linked worktrees whose branch is merged, waiting to be deleted (`merged`).
     pub merged: HashMap<PathBuf, merged::Merged>,
-    /// Git state each worktree was last checked for being merged at (`git::merge_key`).
+    /// Git state each worktree was last checked for being merged at (`git::Refs::merge_key`).
     merge_keys: HashMap<PathBuf, String>,
     /// Why the config file couldn't be loaded; while set, `save` leaves the file alone.
     config_error: Option<String>,
@@ -418,24 +418,11 @@ impl App {
     fn rewatch(&self) {
         self.set_git_watch();
         let wts: Vec<PathBuf> = self.projects().flat_map(|p| p.worktrees.iter().flatten()).map(|w| w.path.clone()).collect();
-        self.check_merged(&wts);
-        self.refresh_behind(wts);
+        self.refresh_refs(wts);
     }
 
     fn set_git_watch(&self) {
         self.watcher.set(self.projects().flat_map(|p| git::watch_paths(&p.path)).collect());
-    }
-
-    /// Off the UI thread: one `git rev-list` per worktree in `wts`.
-    fn refresh_behind(&self, wts: Vec<PathBuf>) {
-        if wts.is_empty() {
-            return;
-        }
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            let m = wts.iter().map(|p| (git::behind(p), p)).filter(|(n, _)| *n > 0).map(|(n, p)| (p.clone(), n)).collect();
-            let _ = tx.send_event(Ev::Behind(wts, m));
-        });
     }
 
     /// Re-read every project's worktrees and watch them (we changed them).
@@ -463,8 +450,7 @@ impl App {
         self.merged.retain(|k, _| all.contains(k));
         self.merge_keys.retain(|k, _| all.contains(k));
         let wts: Vec<PathBuf> = all.into_iter().filter(|w| views.contains(w)).collect();
-        self.check_merged(&wts);
-        self.refresh_behind(wts);
+        self.refresh_refs(wts);
         if self.explorer().is_some_and(|e| views.contains(&e.root)) {
             self.refresh_status();
         }
