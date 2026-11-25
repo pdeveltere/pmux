@@ -114,6 +114,8 @@ pub struct App {
     pub show_agents: bool,
     /// Status bar panel button under the mouse.
     pub status_hover: Option<Panel>,
+    /// The sidebar header's + (new workspace at ~) is under the mouse.
+    pub plus_hover: bool,
     pub sidebar_w: f32, // logical px
     pub sel: usize,
     pub hover: Option<usize>,
@@ -211,7 +213,7 @@ impl App {
     pub fn new(tx: Tx, socket: PathBuf) -> Self {
         let default = || {
             let cwd = std::env::current_dir().unwrap_or_default();
-            config::Config { workspace: vec![config::WsCfg { name: "default".into(), projects: vec![cwd.display().to_string()] }] }
+            config::Config { workspace: vec![config::WsCfg { name: "default".into(), path: None, projects: vec![cwd.display().to_string()] }] }
         };
         // A config we can't parse is left alone (not overwritten) until the user fixes it.
         let (cfg, config_error) = match config::load() {
@@ -229,7 +231,11 @@ impl App {
         let workspaces = cfg
             .workspace
             .into_iter()
-            .map(|w| Workspace { name: w.name, projects: w.projects.iter().filter_map(|p| Project::open(&config::expand(p))).collect() })
+            .map(|w| {
+                let path = w.folder();
+                let path = std::fs::canonicalize(&path).unwrap_or(path);
+                Workspace { name: w.name, path, projects: w.projects.iter().filter_map(|p| Project::open(&config::expand(p))).collect() }
+            })
             .collect();
         let flash = config_error.as_ref().map(|e| (format!("config not loaded (changes won't be saved): {e}"), Instant::now()));
         let mut app = App {
@@ -243,6 +249,7 @@ impl App {
             show_sidebar: true,
             show_agents: true,
             status_hover: None,
+            plus_hover: false,
             sidebar_w: SIDEBAR_W,
             sel: 0,
             hover: None,
@@ -404,7 +411,11 @@ impl App {
             workspace: self
                 .workspaces
                 .iter()
-                .map(|w| config::WsCfg { name: w.name.clone(), projects: w.projects.iter().map(|p| config::tilde(&p.path)).collect() })
+                .map(|w| config::WsCfg {
+                    name: w.name.clone(),
+                    path: Some(config::tilde(&w.path)),
+                    projects: w.projects.iter().map(|p| config::tilde(&p.path)).collect(),
+                })
                 .collect(),
         };
         config::save(&c);
@@ -458,7 +469,7 @@ impl App {
 
     // ---- views ----
 
-    /// (workspace, project, worktree) names for a view path.
+    /// (workspace, project, worktree) names for a view path; a workspace's own folder is all three.
     pub fn names(&self, view: &Path) -> (String, String, String) {
         for ws in &self.workspaces {
             for p in &ws.projects {
@@ -470,6 +481,10 @@ impl App {
                     return (ws.name.clone(), p.name.clone(), wt.branch.clone());
                 }
             }
+        }
+        // A workspace's own folder (a project at the same path wins, above).
+        if let Some(ws) = self.workspaces.iter().find(|w| w.path == view) {
+            return (ws.name.clone(), ws.name.clone(), ws.name.clone());
         }
         let n = util::file_name(view);
         (String::new(), n.clone(), n)

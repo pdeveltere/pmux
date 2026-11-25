@@ -17,7 +17,7 @@ impl App {
                     item("Rename…", Action::RenameWorkspace(name.clone())),
                     fold(self, ws_key(&name)),
                     sep(),
-                    item("Delete workspace", Action::Delete(Close::Workspace(name))),
+                    item("Close", Action::Delete(Close::Workspace(name))),
                 ]
             }
             Some(Row::Proj(w, p)) => {

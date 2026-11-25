@@ -29,19 +29,19 @@ impl App {
         &self.workspaces[w].projects[p]
     }
 
-    /// The view a row opens; workspaces have none.
+    /// The view a row opens (a workspace's: its own folder).
     pub fn row_view(&self, r: Row) -> Option<PathBuf> {
         match r {
+            Row::Ws(wi) => Some(self.workspaces[wi].path.clone()),
             Row::Proj(wi, pi) => Some(self.project(wi, pi).path.clone()),
             Row::Wt(wi, pi, ti) => Some(self.project(wi, pi).worktrees.as_ref()?[ti].path.clone()),
-            Row::Ws(_) => None,
         }
     }
 
     /// The fold key of a row that can fold.
     fn fold_key(&self, row: Row) -> Option<String> {
         match row {
-            Row::Ws(w) => Some(ws_key(&self.workspaces[w].name)),
+            Row::Ws(w) if !self.workspaces[w].projects.is_empty() => Some(ws_key(&self.workspaces[w].name)),
             Row::Proj(w, p) if self.project(w, p).has_linked() => Some(proj_key(&self.project(w, p).path)),
             _ => None,
         }
@@ -91,19 +91,10 @@ impl App {
         self.workspaces.iter().position(|w| w.name == name)
     }
 
-    /// Click (or release without a drag): open the row's view, or fold a workspace.
+    /// Click (or release without a drag): open the row's view.
     pub(super) fn click_row(&mut self, row: Row) {
-        if !self.row_valid(row) {
-            return;
-        }
-        match self.row_view(row) {
-            Some(v) => self.open_view(v),
-            None => {
-                if let Some(k) = self.fold_key(row) {
-                    self.toggle_fold(k);
-                }
-                self.focus = Focus::Sidebar;
-            }
+        if let Some(v) = self.row_valid(row).then(|| self.row_view(row)).flatten() {
+            self.open_view(v);
         }
     }
 
@@ -111,7 +102,7 @@ impl App {
         let rows = self.rows();
         if rows.is_empty() {
             match ch {
-                Some('W') => self.prompt_new_workspace(),
+                Some('W' | 'a') => self.prompt_new_workspace(),
                 Some('q') => self.quit = true,
                 _ => {}
             }
@@ -236,7 +227,18 @@ impl App {
     // ---- adding ----
 
     pub(super) fn prompt_new_workspace(&mut self) {
-        self.prompt = Some(Prompt::new(PromptKind::NewWorkspace, "New workspace", ""));
+        self.prompt = Some(Prompt::new(PromptKind::NewWorkspace, "New workspace folder", "~/"));
+    }
+
+    /// The header's +: a workspace at `~`, opened right away (just opened, if there is one).
+    pub(super) fn add_home_workspace(&mut self) {
+        let home = std::fs::canonicalize(config::home()).unwrap_or_else(|_| config::home());
+        if !self.workspaces.iter().any(|w| w.path == home) {
+            if let Err(e) = self.add_workspace(&home.display().to_string()) {
+                return self.say(e);
+            }
+        }
+        self.open_view(home);
     }
 
     pub(super) fn prompt_new_worktree(&mut self, project: PathBuf) {
@@ -255,14 +257,16 @@ impl App {
         let w = match w.or_else(|| self.selected_ws()).or(self.workspaces.len().checked_sub(1)) {
             Some(w) => w,
             None => {
-                // No workspace yet: make one so the project has a home.
-                self.workspaces.push(Workspace { name: "default".into(), projects: vec![] });
-                self.save();
+                // No workspace yet: make one at ~ so the project has a home.
+                if let Err(e) = self.add_workspace("~") {
+                    return self.say(e);
+                }
                 0
             }
         };
-        let name = self.workspaces[w].name.clone();
-        self.prompt = Some(Prompt::new(PromptKind::AddProject(name.clone()), format!("Add project to {name}"), "~/"));
+        let ws = &self.workspaces[w];
+        let (name, dir) = (ws.name.clone(), format!("{}/", config::tilde(&ws.path).trim_end_matches('/')));
+        self.prompt = Some(Prompt::new(PromptKind::AddProject(name.clone()), format!("Add project to {name}"), &dir));
     }
 
     /// A workspace name that's not empty and not taken (except by workspace `except`).
@@ -277,13 +281,19 @@ impl App {
         Ok(name)
     }
 
-    pub(super) fn add_workspace(&mut self, name: &str) -> Result<(), String> {
-        let name = self.check_ws_name(name, None)?;
-        self.workspaces.push(Workspace { name: name.into(), projects: vec![] });
+    /// Add folder `dir` as a workspace, named after it ("api 2" when "api" is taken); its name.
+    pub(super) fn add_workspace(&mut self, dir: &str) -> Result<String, String> {
+        let path = std::fs::canonicalize(config::expand(dir.trim())).ok().filter(|p| p.is_dir()).ok_or(format!("not a directory: {dir}"))?;
+        if let Some(ws) = self.workspaces.iter().find(|w| w.path == path) {
+            return Err(format!("{} is already a workspace", ws.name));
+        }
+        let base = util::file_name(&path);
+        let name = (1..).map(|i| if i == 1 { base.clone() } else { format!("{base} {i}") }).find(|n| self.ws_index(n).is_none()).expect("a free name");
+        self.workspaces.push(Workspace { name: name.clone(), path, projects: vec![] });
         self.sel = self.rows().len() - 1;
         self.save();
         self.dirty = true;
-        Ok(())
+        Ok(name)
     }
 
     pub(super) fn rename_workspace(&mut self, w: usize, name: &str) -> Result<(), String> {
@@ -341,7 +351,7 @@ impl App {
         let (name, paths) = match c {
             Close::Workspace(n) => {
                 let ws = &self.workspaces[self.ws_index(n)?];
-                (format!("workspace {}", ws.name), ws.projects.iter().flat_map(Project::view_paths).collect())
+                (format!("workspace {}", ws.name), ws.view_paths())
             }
             Close::Project(path) => {
                 let (w, p) = self.proj_index(path)?;
@@ -354,21 +364,14 @@ impl App {
         Some((name, paths, n))
     }
 
-    /// Close right away if nothing would be lost, otherwise ask first:
-    /// - a workspace asks when panes run in it;
-    /// - a project never asks (only the sidebar row goes; files stay);
-    /// - a worktree never asks: it's removed with `--force`, uncommitted and untracked files and all.
+    /// Close right away, never asking: a workspace or project only leaves the sidebar (its panes close, files
+    /// stay); a worktree is removed with `--force`, uncommitted and untracked files and all.
     pub(super) fn request_close(&mut self, c: Close) {
-        let Some((name, _, n)) = self.close_info(&c) else { return self.say("that's no longer in the sidebar") };
+        let Some((name, _, _)) = self.close_info(&c) else { return self.say("that's no longer in the sidebar") };
         match c {
             Close::Worktree(_, wt) if self.removing.contains(&wt) => self.say(format!("already deleting {name}")),
             Close::Worktree(proj, wt) => self.start_removal(Removal { proj, wt, name, force: true, reply: None, auto: None }),
-            c @ Close::Project(..) => self.close(c),
-            c if n == 0 => self.close(c),
-            c => {
-                let label = format!("Delete {name} and close its {}? Files stay on disk. y/n", util::plural(n, "pane"));
-                self.prompt = Some(Prompt::new(PromptKind::Confirm(c), label, ""));
-            }
+            c => self.close(c),
         }
     }
 
@@ -382,7 +385,7 @@ impl App {
                 if let Some(w) = self.ws_index(&n) {
                     let ws = self.workspaces.remove(w);
                     self.folded.remove(&ws_key(&ws.name));
-                    self.closed_tree(format!("deleted {name} from pmux"));
+                    self.closed_tree(format!("closed {name}"));
                 }
             }
             Close::Project(path) => {

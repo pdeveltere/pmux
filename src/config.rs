@@ -1,4 +1,5 @@
-//! The sidebar's workspaces and projects, persisted as TOML in `~/.config/pmux/workspaces.toml`.
+//! The sidebar's workspaces (each a folder) and their projects, persisted as TOML in
+//! `~/.config/pmux/workspaces.toml`.
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,12 +11,37 @@ pub struct Config {
     pub workspace: Vec<WsCfg>,
 }
 
-/// One workspace: a name and its project directories (`~`-relative where possible).
+/// One workspace: a name, its folder and its project directories (`~`-relative where possible).
 #[derive(Serialize, Deserialize)]
 pub struct WsCfg {
     pub name: String,
+    /// Missing in configs from before workspaces had a folder: then it's the projects' common
+    /// parent folder (`~` without projects).
+    #[serde(default)]
+    pub path: Option<String>,
     #[serde(default)]
     pub projects: Vec<String>,
+}
+
+impl WsCfg {
+    /// The workspace folder, absolute.
+    pub fn folder(&self) -> PathBuf {
+        if let Some(p) = &self.path {
+            return expand(p);
+        }
+        let mut dirs = self.projects.iter().map(|p| expand(p));
+        let Some(first) = dirs.next() else { return home() };
+        let mut common = first.parent().map(Path::to_path_buf).unwrap_or(first);
+        for d in dirs {
+            while !d.starts_with(&common) {
+                match common.parent() {
+                    Some(p) => common = p.to_path_buf(),
+                    None => break,
+                }
+            }
+        }
+        common
+    }
 }
 
 /// `$HOME`, or `/` when unset.
@@ -67,5 +93,21 @@ pub fn tilde(p: &Path) -> String {
     match p.strip_prefix(home()) {
         Ok(r) => format!("~/{}", r.display()),
         Err(_) => p.display().to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folder_defaults_to_common_parent() {
+        let ws = |projects: &[&str]| WsCfg { name: "w".into(), path: None, projects: projects.iter().map(|s| s.to_string()).collect() };
+        assert_eq!(ws(&["/a/b/x", "/a/b/y"]).folder(), PathBuf::from("/a/b"));
+        assert_eq!(ws(&["/a/b/x", "/a/c"]).folder(), PathBuf::from("/a"));
+        assert_eq!(ws(&["/a/b/x"]).folder(), PathBuf::from("/a/b"));
+        assert_eq!(ws(&[]).folder(), home());
+        let set = WsCfg { path: Some("/z".into()), ..ws(&["/a/b"]) };
+        assert_eq!(set.folder(), PathBuf::from("/z"));
     }
 }

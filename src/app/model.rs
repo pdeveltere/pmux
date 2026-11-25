@@ -2,9 +2,20 @@
 use crate::{git, util};
 use std::path::{Path, PathBuf};
 
+/// A workspace: a folder of its own (its row opens a view there) holding a list of projects.
 pub struct Workspace {
     pub name: String,
+    pub path: PathBuf,
     pub projects: Vec<Project>,
+}
+
+impl Workspace {
+    /// Its own view plus every project's.
+    pub fn view_paths(&self) -> Vec<PathBuf> {
+        let mut v = vec![self.path.clone()];
+        v.extend(self.projects.iter().flat_map(Project::view_paths));
+        v
+    }
 }
 
 pub struct Project {
@@ -197,8 +208,6 @@ pub enum PromptKind {
     AddProject(String),
     NewWorkspace,
     NewWorktree(PathBuf),
-    /// Yes/no before closing something that still has panes (or a worktree with changes).
-    Confirm(Close),
     RenameWorkspace(String),
 }
 

@@ -1,6 +1,6 @@
 //! Tabs follow their terminal into another worktree (c11's "the folder is the truth", applied to
 //! pmux's tree): when a pane's shell `cd`s, or its agent moves (`cd`, `EnterWorktree`), into
-//! another worktree of the same project, its tab moves there. A pane split beside others moves
+//! another worktree, of its own project or any other (or a workspace's own folder), its tab moves there. A pane split beside others moves
 //! out into a tab of its own.
 use super::{App, Tab};
 use crate::hold::Moved;
@@ -14,10 +14,10 @@ impl App {
         self.move_pane(id, to);
     }
 
-    /// The worktree `dir` is in, if it's another one of the project `from` belongs to.
+    /// The view `dir` is in (the deepest, when they nest), if it isn't `from`.
     fn follow_target(&self, from: &Path, dir: &Path) -> Option<PathBuf> {
-        let views = self.projects().map(|p| p.view_paths()).find(|v| v.iter().any(|x| x == from))?;
-        let to = views.into_iter().filter(|v| dir.starts_with(v)).max_by_key(|v| v.as_os_str().len())?;
+        let views = self.workspaces.iter().flat_map(|w| w.view_paths());
+        let to = views.filter(|v| dir.starts_with(v)).max_by_key(|v| v.as_os_str().len())?;
         (to != from).then_some(to)
     }
 

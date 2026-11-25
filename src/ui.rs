@@ -356,6 +356,14 @@ fn draw_tree(
 fn sidebar(app: &App, p: &mut Painter) {
     panel(app, p, app.sidebar_rect(), true);
     panel_header(app, p, app.sidebar_header(), "Workspaces", app.focus == Focus::Sidebar);
+    // + opens a new workspace at ~.
+    let plus = app.sidebar_plus();
+    if plus.h > 0.0 {
+        if app.plus_hover {
+            p.rect(plus, BAND_HOVER);
+        }
+        p.text_centered("+", plus, 15.0, if app.plus_hover { TEXT } else { MUTED });
+    }
     let rows = app.rows();
     let tree = app.sidebar_tree(rows.len());
     let levels: Vec<usize> = rows.iter().map(|r| r.level()).collect();
@@ -372,8 +380,8 @@ fn sidebar(app: &App, p: &mut Painter) {
             Row::Ws(wi) => {
                 let ws = &app.workspaces[wi];
                 let folded = app.folded.contains(&ws_key(&ws.name));
-                // Folded: its panes roll up into this row.
-                let panes = if folded { app.panes.values().filter(|pn| app.names(&pn.view).0 == ws.name).map(|pn| pn.id).collect() } else { vec![] };
+                // Its own folder's panes; folded, its projects' roll up into it too.
+                let panes = if folded { app.panes.values().filter(|pn| app.names(&pn.view).0 == ws.name).map(|pn| pn.id).collect() } else { app.panes_in(&ws.path) };
                 let open = !folded && !ws.projects.is_empty();
                 (ws.name.clone(), folder(open), TEXT, true, panes)
             }

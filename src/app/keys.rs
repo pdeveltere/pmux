@@ -3,7 +3,7 @@ use super::{App, Focus, Panel, Prompt, PromptKind};
 use crate::{config, input, platform};
 use alacritty_terminal::term::TermMode;
 use winit::event::{ElementState, KeyEvent};
-use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::keyboard::{ModifiersState, NamedKey};
 
 impl App {
     pub fn on_paste(&mut self, s: &str) {
@@ -153,13 +153,6 @@ impl App {
 
     fn prompt_key(&mut self, k: &KeyEvent) {
         let Some(mut p) = self.prompt.take() else { return };
-        let yes = input::named(k) == Some(NamedKey::Enter) || matches!(&k.logical_key, Key::Character(s) if s.as_str() == "y");
-        if let PromptKind::Confirm(c) = p.kind {
-            if yes {
-                self.close(c);
-            }
-            return;
-        }
         match input::named(k) {
             Some(NamedKey::Escape) => return,
             Some(NamedKey::Enter) => return self.submit(p),
@@ -167,7 +160,7 @@ impl App {
                 p.input.pop();
             }
             Some(NamedKey::Tab) => {
-                if matches!(p.kind, PromptKind::AddProject(_)) {
+                if matches!(p.kind, PromptKind::AddProject(_) | PromptKind::NewWorkspace) {
                     p.input = complete_dir(&p.input);
                 }
             }
@@ -191,13 +184,12 @@ impl App {
                 Some(w) => self.add_project(w, input).map(|name| format!("added {name}")),
                 None => Err(format!("workspace {ws} no longer exists")),
             },
-            PromptKind::NewWorkspace => self.add_workspace(input).map(|()| String::new()),
+            PromptKind::NewWorkspace => self.add_workspace(input).map(|name| format!("added workspace {name}")),
             PromptKind::RenameWorkspace(ws) => match self.ws_index(&ws) {
                 Some(w) => self.rename_workspace(w, input).map(|()| String::new()),
                 None => Err(format!("workspace {ws} no longer exists")),
             },
             PromptKind::NewWorktree(proj) => return self.add_worktree(&proj, input),
-            PromptKind::Confirm(c) => return self.close(c),
         };
         match r {
             Ok(m) if m.is_empty() => {}

@@ -64,9 +64,9 @@ impl App {
             let w = match self.workspaces.iter().position(|w| w.name == IMPORT_WS) {
                 Some(w) => w,
                 None => {
-                    if let Err(e) = self.add_workspace(IMPORT_WS) {
-                        return Reply::err(e);
-                    }
+                    // At ~, named for Herdr.
+                    let home = std::fs::canonicalize(crate::config::home()).unwrap_or_else(|_| crate::config::home());
+                    self.workspaces.push(super::Workspace { name: IMPORT_WS.into(), path: home, projects: vec![] });
                     self.workspaces.len() - 1
                 }
             };

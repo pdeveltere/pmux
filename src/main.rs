@@ -48,7 +48,7 @@ usage:
   pmux open <file>          open a file in an editor tab of this worktree
   pmux status <state>       set my state: working|waiting|idle|done|error|clear
   pmux title <text>         set my title
-  pmux ws new <name>                   add a workspace
+  pmux ws new <dir>                    add a workspace (a folder)
   pmux project add <dir> [-w <ws>]     add a project (default: my workspace)
   pmux ws rm <name> [--force]          close a workspace (sidebar only)
   pmux project rm <dir|name> [--force] close a project (sidebar only; files untouched)
@@ -67,8 +67,8 @@ keys:
   ⌘↑ ⌘↓ prev/next worktree   ⌘N next pane needing you   ⌘= ⌘- ⌘0 font size   ⌘Q quit
   C-a prefix (tmux style): | split  h/l focus  x close  c clear  j/k worktree  n attention  Tab sidebar  q quit
 sidebar:
-  j/k move  Enter open  h/l fold  a add project  w new worktree  W new workspace
-  D remove worktree  x close workspace/project (or hover ×)  Esc back
+  j/k move  Enter open  h/l fold  a add project  w new worktree  W new workspace (header +: one at ~)
+  D remove worktree  x close (or hover ×)  Esc back
 ";
 
 struct Runner {

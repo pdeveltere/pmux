@@ -104,8 +104,8 @@ impl App {
                 }
                 None => Reply::err("not inside a pmux pane"),
             },
-            ["ws", "new", name @ ..] if !name.is_empty() => match self.add_workspace(&name.join(" ")) {
-                Ok(()) => Reply::ok(""),
+            ["ws", "new" | "add", dir, ..] => match self.add_workspace(dir) {
+                Ok(name) => Reply::ok(format!("added workspace {name}")),
                 Err(e) => Reply::err(e),
             },
             ["ws", "rm", name, ..] => match self.ws_index(name) {
@@ -139,7 +139,11 @@ impl App {
     fn tree(&self, me: Option<u32>) -> String {
         let mut s = String::new();
         for ws in &self.workspaces {
-            s += &format!("{}\n", ws.name);
+            s += &format!("{}  {}\n", ws.name, config::tilde(&ws.path));
+            for id in self.panes_in(&ws.path) {
+                let pn = &self.panes[&id];
+                s += &format!("  %{} {} [{}] {}{}\n", id, pn.kind(), state_str(pn), pn.label(), here(id, me));
+            }
             for p in &ws.projects {
                 s += &format!("  {}  {}\n", p.name, config::tilde(&p.path));
                 let mut views: Vec<(String, PathBuf)> = p.listed().map(|(_, t)| (t.branch.clone(), t.path.clone())).collect();
