@@ -76,8 +76,9 @@ impl App {
         if self.panes[&id].search.is_some() {
             return self.search_tab_key(id, k);
         }
-        let ac = self.panes[&id].vt.mode().contains(TermMode::APP_CURSOR);
-        let bytes = input::encode(k, m, ac);
+        let mode = self.panes[&id].vt.mode();
+        let kitty = mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL);
+        let bytes = input::encode(k, m, mode.contains(TermMode::APP_CURSOR), kitty);
         if !bytes.is_empty() {
             self.type_pane(id, &bytes);
         }

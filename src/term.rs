@@ -47,7 +47,9 @@ pub struct Vt {
 impl Vt {
     pub fn new(cols: usize, lines: usize) -> Self {
         let events = Listener::default();
-        let cfg = Config { scrolling_history: 10_000, ..Default::default() };
+        // kitty keyboard: apps (Claude Code) ask for it with `CSI ? u` to get keys legacy bytes can't
+        // tell apart, like Ctrl+Enter.
+        let cfg = Config { scrolling_history: 10_000, kitty_keyboard: true, ..Default::default() };
         let term = Term::new(cfg, &Size { cols: cols.max(2), lines: lines.max(1) }, events.clone());
         Vt { term, parser: Processor::new(), events }
     }
@@ -275,5 +277,20 @@ mod tests {
         assert_eq!(a.text(), b.text());
         b.resize(10, 3);
         assert!(b.text().starts_with("abcdefgh"));
+    }
+
+    #[test]
+    fn kitty_keyboard_answers_and_survives_dump() {
+        use alacritty_terminal::event::Event;
+        use alacritty_terminal::term::TermMode;
+        let mut a = Vt::new(20, 4);
+        let replies = |ev: Vec<Event>| ev.into_iter().filter_map(|e| if let Event::PtyWrite(s) = e { Some(s) } else { None }).collect::<Vec<_>>();
+        assert_eq!(replies(a.feed(b"\x1b[?u")), ["\x1b[?0u"]);
+        a.feed(b"\x1b[>1u");
+        assert!(a.mode().contains(TermMode::DISAMBIGUATE_ESC_CODES));
+        assert_eq!(replies(a.feed(b"\x1b[?u")), ["\x1b[?1u"]);
+        let mut b = Vt::new(20, 4);
+        b.feed(&a.dump(None));
+        assert_eq!(a.mode(), b.mode());
     }
 }

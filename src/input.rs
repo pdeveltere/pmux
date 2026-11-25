@@ -33,8 +33,10 @@ pub fn base_char(k: &KeyEvent, m: M) -> Option<char> {
 }
 
 /// Bytes a key press sends to the PTY, as xterm encodes it. `app_cursor`: DECCKM is on
-/// (arrows send `ESC O x` instead of `ESC [ x`).
-pub fn encode(k: &KeyEvent, m: M, app_cursor: bool) -> Vec<u8> {
+/// (arrows send `ESC O x` instead of `ESC [ x`). `kitty`: the app turned on the kitty keyboard
+/// protocol, so a modified Enter is sent as `CSI 13 ; mods u` (legacy bytes make Ctrl+Enter and
+/// Shift+Enter a plain Enter).
+pub fn encode(k: &KeyEvent, m: M, app_cursor: bool, kitty: bool) -> Vec<u8> {
     let mut out = Vec::new();
     let csi = |s: &str| format!("\x1b[{s}").into_bytes();
     let arrow = |c: char| -> Vec<u8> {
@@ -55,6 +57,9 @@ pub fn encode(k: &KeyEvent, m: M, app_cursor: bool) -> Vec<u8> {
     };
     match &k.logical_key {
         Key::Named(n) => match n {
+            NamedKey::Enter if kitty && (m.shift_key() || m.control_key()) => {
+                out = csi(&format!("13;{}u", modnum(m)))
+            }
             NamedKey::Enter => {
                 if m.alt_key() {
                     out.push(0x1b)
