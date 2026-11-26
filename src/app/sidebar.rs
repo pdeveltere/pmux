@@ -10,13 +10,21 @@ impl App {
     /// The visible sidebar rows, top to bottom.
     pub fn rows(&self) -> Vec<Row> {
         let mut out = Vec::new();
+        // The row being typed in, if any: first under the parent it adds to.
+        let inline = self.prompt.as_ref().filter(|p| p.inline).map(|p| &p.kind);
         for (wi, ws) in self.workspaces.iter().enumerate() {
             out.push(Row::Ws(wi));
             if self.folded.contains(&ws_key(&ws.name)) {
                 continue;
             }
+            if matches!(inline, Some(PromptKind::AddProject(name)) if *name == ws.name) {
+                out.push(Row::New(wi, 1));
+            }
             for (pi, p) in ws.projects.iter().enumerate() {
                 out.push(Row::Proj(wi, pi));
+                if matches!(inline, Some(PromptKind::NewWorktree(path)) if *path == p.path) {
+                    out.push(Row::New(wi, 2));
+                }
                 if !self.folded.contains(&proj_key(&p.path)) {
                     out.extend(p.listed().map(|(ti, _)| Row::Wt(wi, pi, ti)));
                 }
@@ -35,6 +43,7 @@ impl App {
             Row::Ws(wi) => Some(self.workspaces[wi].path.clone()),
             Row::Proj(wi, pi) => Some(self.project(wi, pi).path.clone()),
             Row::Wt(wi, pi, ti) => Some(self.project(wi, pi).worktrees.as_ref()?[ti].path.clone()),
+            Row::New(..) => None,
         }
     }
 
@@ -52,6 +61,7 @@ impl App {
             Row::Ws(w) => w < self.workspaces.len(),
             Row::Proj(w, p) => self.workspaces.get(w).is_some_and(|ws| p < ws.projects.len()),
             Row::Wt(w, p, t) => self.workspaces.get(w).and_then(|ws| ws.projects.get(p)).and_then(|pr| pr.worktrees.as_ref()).is_some_and(|v| t < v.len()),
+            Row::New(..) => false,
         }
     }
 
@@ -76,7 +86,7 @@ impl App {
         match row {
             Row::Ws(w) => Some(Close::Workspace(self.workspaces[w].name.clone())),
             Row::Proj(w, p) => Some(Close::Project(self.project(w, p).path.clone())),
-            Row::Wt(..) => None,
+            Row::Wt(..) | Row::New(..) => None,
         }
     }
 
@@ -191,8 +201,9 @@ impl App {
                     let b = block(rows.iter().position(|r| *r == Row::Proj(w, p))?);
                     Some(if before(b) { (Drop::Proj(w, p), b.0, 1) } else { (Drop::Proj(w, p + 1), b.1, 1) })
                 }
+                Row::New(..) => None,
             },
-            Row::Wt(..) => None,
+            Row::Wt(..) | Row::New(..) => None,
         }
     }
 
@@ -241,8 +252,38 @@ impl App {
         self.open_view(home);
     }
 
+    /// Type the new worktree's branch in a new row under its project.
     pub(super) fn prompt_new_worktree(&mut self, project: PathBuf) {
-        self.prompt = Some(Prompt::new(PromptKind::NewWorktree(project), "New worktree branch", ""));
+        let Some((w, _)) = self.proj_index(&project) else { return self.say("that project is no longer in the sidebar") };
+        self.folded.remove(&ws_key(&self.workspaces[w].name));
+        self.folded.remove(&proj_key(&project));
+        self.start_inline(PromptKind::NewWorktree(project));
+    }
+
+    /// Open an inline prompt: its row appears in the tree, selected (so it scrolls into view).
+    fn start_inline(&mut self, kind: PromptKind) {
+        self.show_sidebar = true;
+        self.prompt = Some(Prompt::inline(kind));
+        if let Some(i) = self.rows().iter().position(|r| matches!(r, Row::New(..))) {
+            self.sel = i;
+        }
+        self.dirty = true;
+    }
+
+    /// An inline prompt `p` is done (taken out of `self.prompt`): select the row it was adding to.
+    pub(super) fn end_inline(&mut self, p: &Prompt) {
+        if !p.inline {
+            return;
+        }
+        let parent = match &p.kind {
+            PromptKind::AddProject(ws) => self.ws_index(ws).map(Row::Ws),
+            PromptKind::NewWorktree(proj) => self.proj_index(proj).map(|(w, p)| Row::Proj(w, p)),
+            _ => None,
+        };
+        match parent {
+            Some(r) => self.select_row(r),
+            None => self.sel = self.sel.min(self.rows().len().saturating_sub(1)),
+        }
     }
 
     /// Add a project to workspace `w` (default: the selected row's workspace, else the last one).
@@ -257,9 +298,20 @@ impl App {
                 0
             }
         };
-        let ws = &self.workspaces[w];
-        let (name, dir) = (ws.name.clone(), format!("{}/", config::tilde(&ws.path).trim_end_matches('/')));
-        self.prompt = Some(Prompt::new(PromptKind::AddProject(name.clone()), format!("Add project to {name}"), &dir));
+        let name = self.workspaces[w].name.clone();
+        self.folded.remove(&ws_key(&name));
+        self.start_inline(PromptKind::AddProject(name));
+    }
+
+    /// The inline new project `name`: a folder in workspace `w`'s (or an absolute / `~` path), made
+    /// if it doesn't exist yet.
+    pub(super) fn new_project(&mut self, w: usize, name: &str) -> Result<String, String> {
+        let name = name.trim();
+        let dir = if name.starts_with(['/', '~']) { config::expand(name) } else { self.workspaces[w].path.join(name) };
+        if !dir.exists() {
+            std::fs::create_dir_all(&dir).map_err(|e| format!("couldn't create {}: {e}", config::tilde(&dir)))?;
+        }
+        self.add_project(w, &dir.display().to_string())
     }
 
     /// Add folder `dir` as a workspace, named after it ("api 2" when "api" is taken); its name.

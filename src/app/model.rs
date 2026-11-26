@@ -74,13 +74,16 @@ pub enum Row {
     Ws(usize),
     Proj(usize, usize),
     Wt(usize, usize, usize),
+    /// The name being typed for a new project (level 1) or worktree (level 2), as the first
+    /// child of its parent: (workspace, level).
+    New(usize, usize),
 }
 
 impl Row {
     /// The workspace this row belongs to.
     pub fn ws(self) -> usize {
         match self {
-            Row::Ws(w) | Row::Proj(w, _) | Row::Wt(w, _, _) => w,
+            Row::Ws(w) | Row::Proj(w, _) | Row::Wt(w, _, _) | Row::New(w, _) => w,
         }
     }
     /// Tree depth: workspace 0, project 1, worktree 2.
@@ -89,6 +92,7 @@ impl Row {
             Row::Ws(_) => 0,
             Row::Proj(..) => 1,
             Row::Wt(..) => 2,
+            Row::New(_, lv) => lv,
         }
     }
 }
@@ -221,11 +225,17 @@ pub struct Prompt {
     pub kind: PromptKind,
     pub label: String,
     pub input: String,
+    /// Typed in a new sidebar row (`Row::New`) instead of the status bar.
+    pub inline: bool,
 }
 
 impl Prompt {
     pub(super) fn new(kind: PromptKind, label: impl Into<String>, input: &str) -> Self {
-        Prompt { kind, label: label.into(), input: input.into() }
+        Prompt { kind, label: label.into(), input: input.into(), inline: false }
+    }
+    /// A name typed in a new sidebar row, like a new folder in Zed's project panel.
+    pub(super) fn inline(kind: PromptKind) -> Self {
+        Prompt { inline: true, ..Prompt::new(kind, "", "") }
     }
 }
 

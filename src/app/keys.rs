@@ -154,14 +154,26 @@ impl App {
     fn prompt_key(&mut self, k: &KeyEvent) {
         let Some(mut p) = self.prompt.take() else { return };
         match input::named(k) {
-            Some(NamedKey::Escape) => return,
-            Some(NamedKey::Enter) => return self.submit(p),
+            Some(NamedKey::Escape) => return self.end_inline(&p),
+            Some(NamedKey::Enter) => {
+                self.end_inline(&p);
+                return self.submit(p);
+            }
             Some(NamedKey::Backspace) => {
                 p.input.pop();
             }
             Some(NamedKey::Tab) => {
-                if matches!(p.kind, PromptKind::AddProject(_) | PromptKind::NewWorkspace) {
-                    p.input = complete_dir(&p.input);
+                match &p.kind {
+                    // A new project's name is relative to its workspace's folder.
+                    PromptKind::AddProject(ws) if !p.input.starts_with(['/', '~']) => {
+                        if let Some(w) = self.ws_index(ws) {
+                            let root = format!("{}/", self.workspaces[w].path.display().to_string().trim_end_matches('/'));
+                            let done = complete_dir(&format!("{root}{}", p.input));
+                            p.input = done.strip_prefix(&root).map_or(p.input.clone(), str::to_string);
+                        }
+                    }
+                    PromptKind::AddProject(_) | PromptKind::NewWorkspace => p.input = complete_dir(&p.input),
+                    _ => {}
                 }
             }
             _ => {
@@ -181,7 +193,7 @@ impl App {
         let r = match p.kind {
             // By name: the workspace may have moved (or gone) while the prompt was open.
             PromptKind::AddProject(ws) => match self.ws_index(&ws) {
-                Some(w) => self.add_project(w, input).map(|name| format!("added {name}")),
+                Some(w) => self.new_project(w, input).map(|name| format!("added {name}")),
                 None => Err(format!("workspace {ws} no longer exists")),
             },
             PromptKind::NewWorkspace => self.add_workspace(input).map(|name| format!("added workspace {name}")),
