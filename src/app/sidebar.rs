@@ -241,12 +241,20 @@ impl App {
         self.prompt = Some(Prompt::new(PromptKind::NewWorkspace, "New workspace folder", "~/"));
     }
 
-    /// The header's +: a workspace at `~`, opened right away (just opened, if there is one).
+    /// The header's +: a workspace at `~` at the top, opened right away (an existing one moves up).
     pub(super) fn add_home_workspace(&mut self) {
         let home = std::fs::canonicalize(config::home()).unwrap_or_else(|_| config::home());
-        if !self.workspaces.iter().any(|w| w.path == home) {
-            if let Err(e) = self.add_workspace(&home.display().to_string()) {
-                return self.say(e);
+        match self.workspaces.iter().position(|w| w.path == home) {
+            Some(i) => {
+                let ws = self.workspaces.remove(i);
+                self.workspaces.insert(0, ws);
+                self.save();
+                self.dirty = true;
+            }
+            None => {
+                if let Err(e) = self.add_workspace(&home.display().to_string()) {
+                    return self.say(e);
+                }
             }
         }
         self.open_view(home);
