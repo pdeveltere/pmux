@@ -314,7 +314,7 @@ impl App {
         self.add_project(w, &dir.display().to_string())
     }
 
-    /// Add folder `dir` as a workspace, named after it ("api 2" when "api" is taken); its name.
+    /// Add folder `dir` as a workspace at the top, named after it ("api 2" when "api" is taken); its name.
     pub(super) fn add_workspace(&mut self, dir: &str) -> Result<String, String> {
         let path = std::fs::canonicalize(config::expand(dir.trim())).ok().filter(|p| p.is_dir()).ok_or(format!("not a directory: {dir}"))?;
         if let Some(ws) = self.workspaces.iter().find(|w| w.path == path) {
@@ -322,8 +322,8 @@ impl App {
         }
         let ws = Workspace::new(path, vec![], &self.workspaces);
         let name = ws.name.clone();
-        self.workspaces.push(ws);
-        self.sel = self.rows().len() - 1;
+        self.workspaces.insert(0, ws);
+        self.select_row(Row::Ws(0));
         self.save();
         self.dirty = true;
         Ok(name)
