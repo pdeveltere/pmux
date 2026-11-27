@@ -29,7 +29,7 @@ Needs Rust (stable) and Xcode command line tools (for `swift`, `sips`, `iconutil
 
 ```sh
 tools/install-app.sh          # build and install /Applications/pmux.app
-tools/dist.sh                 # build dist/pmux-<version>-macos-<arch>.zip to share
+tools/dist.sh                 # build target/dist/pmux-<version>-macos-<arch>.zip to share
 ```
 
 ## Usage
