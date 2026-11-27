@@ -1,7 +1,7 @@
 #!/bin/sh
 # Build pmux and install it as /Applications/pmux.app (Spotlight, Launchpad, Dock).
 # Usage: tools/install-app.sh [dest-dir]   (default /Applications)
-# PMUX_BIN=<path> installs that binary instead of building target/release/pmux.
+# PMUX_INSTALL_BIN=<path> installs that binary instead of building target/release/pmux.
 # PMUX_NO_REGISTER=1 skips registering the bundle with Launch Services/Spotlight (tools/dist.sh uses it).
 set -eu
 cd "$(dirname "$0")/.."
@@ -9,9 +9,9 @@ DEST=${1:-/Applications}
 APP="$DEST/pmux.app"
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 
-if [ -z "${PMUX_BIN:-}" ]; then
+if [ -z "${PMUX_INSTALL_BIN:-}" ]; then
   cargo build --release
-  PMUX_BIN=target/release/pmux
+  PMUX_INSTALL_BIN=target/release/pmux
 fi
 
 TMP=$(mktemp -d)
@@ -33,7 +33,7 @@ fi
 
 B="$TMP/pmux.app/Contents"
 mkdir -p "$B/MacOS" "$B/Resources"
-cp "$PMUX_BIN" "$B/MacOS/pmux"
+cp "$PMUX_INSTALL_BIN" "$B/MacOS/pmux"
 cp "$ICNS" "$B/Resources/pmux-$HASH.icns"
 cat > "$B/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

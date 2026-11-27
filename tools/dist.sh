@@ -13,7 +13,7 @@ RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$PWD=pmux --remap-path-prefix=$HOM
 
 rm -rf dist/pmux.app
 mkdir -p dist
-PMUX_BIN=target/dist/release/pmux PMUX_NO_REGISTER=1 tools/install-app.sh dist
+PMUX_INSTALL_BIN=target/dist/release/pmux PMUX_NO_REGISTER=1 tools/install-app.sh dist
 rm -f "$ZIP"
 ditto -c -k --norsrc --noextattr --keepParent dist/pmux.app "$ZIP"
 (cd dist && shasum -a 256 "$(basename "$ZIP")" > "$(basename "$ZIP").sha256")
