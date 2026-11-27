@@ -1,13 +1,18 @@
 #!/bin/sh
 # Build pmux and install it as /Applications/pmux.app (Spotlight, Launchpad, Dock).
 # Usage: tools/install-app.sh [dest-dir]   (default /Applications)
+# PMUX_BIN=<path> installs that binary instead of building target/release/pmux.
+# PMUX_NO_REGISTER=1 skips registering the bundle with Launch Services/Spotlight (tools/dist.sh uses it).
 set -eu
 cd "$(dirname "$0")/.."
 DEST=${1:-/Applications}
 APP="$DEST/pmux.app"
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 
-cargo build --release
+if [ -z "${PMUX_BIN:-}" ]; then
+  cargo build --release
+  PMUX_BIN=target/release/pmux
+fi
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -28,7 +33,7 @@ fi
 
 B="$TMP/pmux.app/Contents"
 mkdir -p "$B/MacOS" "$B/Resources"
-cp target/release/pmux "$B/MacOS/pmux"
+cp "$PMUX_BIN" "$B/MacOS/pmux"
 cp "$ICNS" "$B/Resources/pmux-$HASH.icns"
 cat > "$B/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -55,6 +60,8 @@ codesign --force --sign - "$TMP/pmux.app" 2>/dev/null
 rm -rf "$APP"
 mv "$TMP/pmux.app" "$APP"
 touch "$APP"
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP"
-mdimport "$APP" 2>/dev/null || true
+if [ -z "${PMUX_NO_REGISTER:-}" ]; then
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP"
+  mdimport "$APP" 2>/dev/null || true
+fi
 echo "installed $APP"

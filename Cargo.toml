@@ -2,6 +2,9 @@
 name = "pmux"
 version = "0.0.2"
 edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Agent-aware terminal multiplexer"
+repository = "https://github.com/pdeveltere/pmux"
 
 [dependencies]
 alacritty_terminal = "0.26"
