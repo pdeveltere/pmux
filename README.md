@@ -5,7 +5,8 @@ workspaces, projects and git worktrees, where every pane can list, read and mess
 state (working, waiting, idle, done) so you can see which agent needs you.
 
 Terminals live in a background `pmux hold` process, so closing, crashing or rebuilding the window never kills
-them.
+them. When a window of a newer pmux opens, the background pmux hands its terminals over to one of the new
+build, so updating pmux doesn't kill them either.
 
 ## Install
 

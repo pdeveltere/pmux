@@ -8,6 +8,13 @@
 //!
 //! Query replies the program expects from "the terminal" (cursor position, device attributes) are
 //! answered here, never by the window, so there's exactly one answer.
+//!
+//! Handoff: a window of another build (`BUILD`) starts `pmux hold --takeover`, which attaches
+//! like a window and sends `HANDOFF`. The old holder stops reading its terminals, sends their
+//! state (`HANDOFF_STATE`, then one `SCREEN` each) and passes their PTY masters over the socket
+//! (`SCM_RIGHTS`). The new holder reads them from there on and says `TAKEN`; the old one exits.
+//! The processes never notice: they keep their PTYs. If the new holder goes away before `TAKEN`,
+//! the old one carries on. That's how a rebuilt pmux keeps your terminals.
 use crate::pty;
 use crate::term::Vt;
 use alacritty_terminal::event::{Event as TEvent, WindowSize};
@@ -15,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{self, Read, Write};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Sender};
@@ -39,6 +47,10 @@ const LAYOUT: u8 = 5;
 const META: u8 = 6;
 /// The window moved a terminal to another view (JSON `Moved`).
 const VIEW: u8 = 7;
+/// From `pmux hold --takeover`: hand me your terminals.
+const HANDOFF: u8 = 8;
+/// From `pmux hold --takeover`: I have them, exit.
+const TAKEN: u8 = 9;
 // Holder → window.
 const WELCOME: u8 = 101;
 const SCREEN: u8 = 102;
@@ -50,6 +62,11 @@ const FAILED: u8 = 106;
 const STATE: u8 = 107;
 /// Where the terminal is working now (a path): its shell `cd`ed, or its agent's hook said so.
 const CWD: u8 = 108;
+/// The terminals being handed over (JSON `Handoff`), followed by their screens and PTYs.
+const HANDOFF_STATE: u8 = 109;
+
+/// This build of pmux. A window that finds a holder of another build has it hand over.
+pub const BUILD: &str = env!("PMUX_BUILD");
 
 /// Look at an agent's screen at most this often while it prints.
 const DETECT_EVERY: Duration = Duration::from_millis(100);
@@ -104,6 +121,39 @@ pub struct Welcome {
     pub terms: Vec<TermInfo>,
     /// Lowest id not yet used (terminals opened with `pmux new` while no window was open).
     pub next_id: u32,
+    /// The holder's `BUILD`; empty from holders that can't hand over.
+    #[serde(default)]
+    pub build: String,
+}
+
+/// The part of `Welcome` every version keeps, to decide what to do before parsing the rest.
+#[derive(Deserialize)]
+struct Hello {
+    version: u32,
+    #[serde(default)]
+    build: String,
+}
+
+/// What a holder hands to its successor: everything about its terminals but their screens (sent
+/// as `SCREEN` frames, in this order) and PTYs (passed as file descriptors, in this order).
+/// Stays readable across versions: new fields get serde defaults.
+#[derive(Serialize, Deserialize)]
+struct Handoff {
+    layout: String,
+    next_id: u32,
+    terms: Vec<Handed>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Handed {
+    info: TermInfo,
+    spawn: Spawn,
+    title: Option<String>,
+    shell: i32,
+    pgid: i32,
+    argv: Vec<String>,
+    session: Option<String>,
+    shell_cwd: Option<PathBuf>,
 }
 
 pub fn sock_path() -> PathBuf {
@@ -138,6 +188,88 @@ fn read_frame(r: &mut impl Read) -> io::Result<(u8, u32, Vec<u8>)> {
     let mut p = vec![0u8; len];
     r.read_exact(&mut p)?;
     Ok((h[0], id, p))
+}
+
+/// File descriptors passed per message (one data byte each), well under the kernel's limit.
+const FDS_PER_MSG: usize = 32;
+
+/// Pass `fds` over the socket (`SCM_RIGHTS`), in order. The receiver gets its own copies.
+fn send_fds(s: &UnixStream, fds: &[RawFd]) -> io::Result<()> {
+    for chunk in fds.chunks(FDS_PER_MSG) {
+        let bytes = std::mem::size_of_val(chunk) as u32;
+        let mut cbuf = vec![0u8; unsafe { libc::CMSG_SPACE(bytes) } as usize];
+        let mut byte = [0u8; 1];
+        let mut iov = libc::iovec { iov_base: byte.as_mut_ptr().cast(), iov_len: 1 };
+        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+        msg.msg_iov = &raw mut iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = cbuf.as_mut_ptr().cast();
+        msg.msg_controllen = cbuf.len() as _;
+        unsafe {
+            let c = libc::CMSG_FIRSTHDR(&raw const msg);
+            (*c).cmsg_level = libc::SOL_SOCKET;
+            (*c).cmsg_type = libc::SCM_RIGHTS;
+            (*c).cmsg_len = libc::CMSG_LEN(bytes) as _;
+            std::ptr::copy_nonoverlapping(chunk.as_ptr(), libc::CMSG_DATA(c).cast::<RawFd>(), chunk.len());
+        }
+        loop {
+            if unsafe { libc::sendmsg(s.as_raw_fd(), &raw const msg, 0) } == 1 {
+                break;
+            }
+            let e = io::Error::last_os_error();
+            if e.kind() != io::ErrorKind::Interrupted {
+                return Err(e);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Receive `n` file descriptors sent by `send_fds`, each close-on-exec.
+fn recv_fds(s: &UnixStream, n: usize) -> io::Result<Vec<File>> {
+    let mut out = Vec::with_capacity(n);
+    while out.len() < n {
+        let bytes = (FDS_PER_MSG * std::mem::size_of::<RawFd>()) as u32;
+        let mut cbuf = vec![0u8; unsafe { libc::CMSG_SPACE(bytes) } as usize];
+        let mut byte = [0u8; 1];
+        let mut iov = libc::iovec { iov_base: byte.as_mut_ptr().cast(), iov_len: 1 };
+        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+        msg.msg_iov = &raw mut iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = cbuf.as_mut_ptr().cast();
+        msg.msg_controllen = cbuf.len() as _;
+        let r = unsafe { libc::recvmsg(s.as_raw_fd(), &raw mut msg, 0) };
+        if r < 0 {
+            let e = io::Error::last_os_error();
+            if e.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(e);
+        }
+        if r == 0 {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        let before = out.len();
+        unsafe {
+            let mut c = libc::CMSG_FIRSTHDR(&raw const msg);
+            while !c.is_null() {
+                if (*c).cmsg_level == libc::SOL_SOCKET && (*c).cmsg_type == libc::SCM_RIGHTS {
+                    let data = libc::CMSG_DATA(c) as *const RawFd;
+                    let k = ((*c).cmsg_len as usize - (data as usize - c as usize)) / std::mem::size_of::<RawFd>();
+                    for i in 0..k {
+                        let fd = std::ptr::read_unaligned(data.add(i));
+                        libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+                        out.push(File::from_raw_fd(fd));
+                    }
+                }
+                c = libc::CMSG_NXTHDR(&raw const msg, c);
+            }
+        }
+        if out.len() == before || msg.msg_flags & libc::MSG_CTRUNC != 0 {
+            return Err(io::Error::other("file descriptors lost in transit"));
+        }
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------- window side
@@ -191,22 +323,34 @@ impl Link {
 
     /// Attach to the holder, starting it if none runs. Returns the link, the welcome, each
     /// terminal's screen, and the stream that live events arrive on.
+    /// A holder of another build hands its terminals to one of this build first.
     pub fn connect() -> Result<(Link, Welcome, Screens, UnixStream), String> {
-        let mut s = match UnixStream::connect(sock_path()) {
-            Ok(s) => s,
-            Err(_) => start()?,
+        let mut took_over = false;
+        let (mut s, p) = loop {
+            let mut s = match UnixStream::connect(sock_path()) {
+                Ok(s) => s,
+                Err(_) => start(&[])?,
+            };
+            let (tag, _, p) = read_frame(&mut s).map_err(|e| format!("background pmux: {e}"))?;
+            if tag != WELCOME {
+                return Err("background pmux: bad welcome".into());
+            }
+            let h: Hello = serde_json::from_slice(&p).map_err(|e| format!("background pmux: {e}"))?;
+            if !h.build.is_empty() && h.build != BUILD && !took_over {
+                drop(s);
+                take_over()?;
+                took_over = true;
+                continue;
+            }
+            if h.version != VERSION {
+                return Err(format!(
+                    "background pmux is version {}, this window {VERSION}, and too old to hand its terminals over: close them or `pkill -f 'pmux hold'`",
+                    h.version
+                ));
+            }
+            break (s, p);
         };
-        let (tag, _, p) = read_frame(&mut s).map_err(|e| format!("background pmux: {e}"))?;
-        if tag != WELCOME {
-            return Err("background pmux: bad welcome".into());
-        }
         let w: Welcome = serde_json::from_slice(&p).map_err(|e| format!("background pmux: {e}"))?;
-        if w.version != VERSION {
-            return Err(format!(
-                "background pmux is version {}, this window {VERSION}: close its terminals or `pkill -f 'pmux hold'`",
-                w.version
-            ));
-        }
         let mut screens = Vec::new();
         for _ in 0..w.terms.len() {
             let (tag, id, p) = read_frame(&mut s).map_err(|e| format!("background pmux: {e}"))?;
@@ -240,22 +384,52 @@ pub fn pump(mut r: UnixStream, f: impl Fn(Msg) -> bool + Send + 'static) {
     });
 }
 
-/// Start `pmux hold` detached from this process, and connect to it.
-fn start() -> Result<UnixStream, String> {
+/// `pmux hold` of this build, detached from this process (its own session, so it outlives the
+/// window), logging to `hold.log`.
+fn hold_cmd(args: &[&str]) -> Result<std::process::Command, String> {
     use std::os::unix::process::CommandExt;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = crate::api::sock_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let log = File::create(dir.join("hold.log")).map_err(|e| e.to_string())?;
+    // A fresh holder starts a fresh log; a takeover adds to its predecessor's.
+    let mut log = File::options();
+    match args.is_empty() {
+        true => log.write(true).truncate(true),
+        false => log.append(true),
+    };
+    let log = log.create(true).open(dir.join("hold.log")).map_err(|e| e.to_string())?;
     let mut cmd = std::process::Command::new(exe);
-    cmd.arg("hold").stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(log);
+    cmd.arg("hold").args(args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(log);
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();
             Ok(())
         });
     }
+    Ok(cmd)
+}
+
+/// Have the running holder hand its terminals to a new one of this build: start
+/// `pmux hold --takeover` and wait until it serves them (it says so on stdout).
+fn take_over() -> Result<(), String> {
+    let mut cmd = hold_cmd(&["--takeover"])?;
+    cmd.stdout(std::process::Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("start background pmux: {e}"))?;
+    let mut said = String::new();
+    let _ = child.stdout.take().map(|mut o| o.read_to_string(&mut said));
+    std::thread::spawn(move || child.wait());
+    match said.trim() {
+        "ok" => Ok(()),
+        _ => Err(format!(
+            "new background pmux didn't take the terminals over (see {})",
+            crate::api::sock_dir().join("hold.log").display()
+        )),
+    }
+}
+
+/// Start `pmux hold` detached from this process, and connect to it.
+fn start(args: &[&str]) -> Result<UnixStream, String> {
+    let mut child = hold_cmd(args)?.spawn().map_err(|e| format!("start background pmux: {e}"))?;
     std::thread::spawn(move || child.wait());
     let until = Instant::now() + Duration::from_secs(2);
     loop {
@@ -280,6 +454,8 @@ enum In {
     Detach(u64),
     Output(u32, Vec<u8>),
     Exit(u32),
+    /// A terminal's reader stopped for a handoff (all its output was sent before this).
+    Stopped(u32),
     /// A `pmux` command while no window is open.
     Api(crate::api::Request, Sender<crate::api::Reply>),
 }
@@ -288,6 +464,8 @@ struct Term {
     vt: Vt,
     master: File,
     shell: i32,
+    /// The shell is this process's child (reap it when it ends); not when it was handed over.
+    ours: bool,
     pgid: i32,
     info: TermInfo,
     /// What it was started with (for `pmux new` beside it).
@@ -322,14 +500,101 @@ struct Holder {
     next_id: u32,
     /// When to look at screens that changed (throttled to `DETECT_EVERY`).
     due: Option<Instant>,
+    /// Readable (one byte written) while a handoff wants every reader to stop: (read, write).
+    stop: (RawFd, RawFd),
+    /// A handoff in progress.
+    handoff: Option<Handing>,
+    /// Handed over: exit, leaving the sockets to the new holder.
+    handed: bool,
+    /// Terminals that worked unseen until the current window attached.
+    unseen: Vec<u32>,
 }
 
-/// `pmux hold`: run until the last terminal ends with no window attached.
-pub fn run() -> i32 {
+/// A handoff to the takeover holder attached as window `gen`.
+struct Handing {
+    gen: u64,
+    /// Terminals whose reader hasn't stopped yet.
+    pending: std::collections::BTreeSet<u32>,
+    /// Everything was sent; waiting for `TAKEN`.
+    sent: bool,
+}
+
+/// A pipe for stopping readers, both ends close-on-exec, the read end non-blocking (to drain it).
+fn stop_pipe() -> io::Result<(RawFd, RawFd)> {
+    let mut fds = [0; 2];
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    unsafe {
+        for fd in fds {
+            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+        }
+        libc::fcntl(fds[0], libc::F_SETFL, libc::O_NONBLOCK);
+    }
+    Ok((fds[0], fds[1]))
+}
+
+/// Read a terminal's output on a thread until it ends (`Exit`, reaping the shell if it's
+/// `ours`) or `stop` becomes readable (`Stopped`, leaving unread output in the PTY for whoever
+/// reads it next).
+fn read_term(id: u32, mut r: File, shell: Option<i32>, stop: RawFd, tx: Sender<In>) {
+    std::thread::spawn(move || {
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let mut fds = [
+                libc::pollfd { fd: r.as_raw_fd(), events: libc::POLLIN, revents: 0 },
+                libc::pollfd { fd: stop, events: libc::POLLIN, revents: 0 },
+            ];
+            if unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) } < 0 {
+                if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                break;
+            }
+            if fds[1].revents != 0 {
+                let _ = tx.send(In::Stopped(id));
+                return;
+            }
+            if fds[0].revents == 0 {
+                continue;
+            }
+            match r.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.send(In::Output(id, buf[..n].to_vec())).is_err() {
+                        return;
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+        if let Some(pid) = shell {
+            let mut st = 0;
+            unsafe { libc::waitpid(pid, &raw mut st, 0) };
+        }
+        let _ = tx.send(In::Exit(id));
+    });
+}
+
+/// `pmux hold`: run until the last terminal ends with no window attached. With `--takeover`, take
+/// the running holder's terminals first (saying `ok` on stdout once serving them).
+pub fn run(args: &[String]) -> i32 {
     let path = sock_path();
-    if UnixStream::connect(&path).is_ok() {
-        eprintln!("pmux hold: already running");
-        return 1;
+    let takeover = args.iter().any(|a| a == "--takeover");
+    let mut taken = None;
+    if let Ok(s) = UnixStream::connect(&path) {
+        if !takeover {
+            eprintln!("pmux hold: already running");
+            return 1;
+        }
+        match receive(s) {
+            Ok(t) => taken = Some(t),
+            Err(e) => {
+                eprintln!("pmux hold: takeover: {e}");
+                return 1;
+            }
+        }
     }
     let dir = crate::api::sock_dir();
     if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -338,6 +603,34 @@ pub fn run() -> i32 {
     }
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    let (tx, rx) = channel();
+    let stop = match stop_pipe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("pmux hold: {e}");
+            return 1;
+        }
+    };
+    let mut h = Holder {
+        terms: BTreeMap::new(),
+        win: None,
+        layout: String::new(),
+        tx: tx.clone(),
+        next_id: 1,
+        due: None,
+        stop,
+        handoff: None,
+        handed: false,
+        unseen: vec![],
+    };
+    // Taking over: serve the terminals before the old holder's sockets are replaced.
+    let adopted = taken.is_some();
+    if let Some(t) = taken {
+        if let Err(e) = h.adopt(t) {
+            eprintln!("pmux hold: takeover: {e}");
+            return 1;
+        }
+    }
     let _ = std::fs::remove_file(&path);
     let l = match UnixListener::bind(&path) {
         Ok(l) => l,
@@ -346,7 +639,6 @@ pub fn run() -> i32 {
             return 1;
         }
     };
-    let (tx, rx) = channel();
     let atx = tx.clone();
     std::thread::spawn(move || {
         for (gen, s) in (1u64..).zip(l.incoming().flatten()) {
@@ -360,8 +652,17 @@ pub fn run() -> i32 {
     {
         eprintln!("pmux hold: {e}");
     }
-    let mut h = Holder { terms: BTreeMap::new(), win: None, layout: String::new(), tx, next_id: 1, due: None };
-    h.restore();
+    drop(tx);
+    if !adopted {
+        h.restore();
+    }
+    if takeover {
+        // Tell the window it can attach, then let go of its pipe.
+        println!("ok");
+        if let Ok(null) = File::options().write(true).open("/dev/null") {
+            unsafe { libc::dup2(null.as_raw_fd(), 1) };
+        }
+    }
     loop {
         let ev = match h.due {
             Some(d) => match rx.recv_timeout(d.saturating_duration_since(Instant::now())) {
@@ -383,9 +684,53 @@ pub fn run() -> i32 {
             None => h.detect_due(),
         }
     }
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(crate::api::hold_sock());
+    if h.handed {
+        eprintln!("pmux hold: handed {} terminals over", h.terms.len());
+    } else {
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(crate::api::hold_sock());
+    }
     0
+}
+
+/// What the takeover holder got from the old one, before it says `TAKEN`.
+struct Taken {
+    conn: UnixStream,
+    state: Handoff,
+    screens: Vec<Vec<u8>>,
+    masters: Vec<File>,
+}
+
+/// Ask the running holder (connected as `s`) for its terminals.
+fn receive(mut s: UnixStream) -> Result<Taken, String> {
+    let e = |e: io::Error| e.to_string();
+    s.set_read_timeout(Some(Duration::from_secs(10))).map_err(e)?;
+    let (tag, _, p) = read_frame(&mut s).map_err(e)?;
+    let hello: Hello = if tag == WELCOME {
+        serde_json::from_slice(&p).map_err(|e| e.to_string())?
+    } else {
+        return Err("bad welcome".into());
+    };
+    if hello.build.is_empty() {
+        return Err("the running background pmux is too old to hand its terminals over".into());
+    }
+    write_frame(&mut s, HANDOFF, 0, &[]).map_err(e)?;
+    // Its screens and live output as a window still come first.
+    let state: Handoff = loop {
+        let (tag, _, p) = read_frame(&mut s).map_err(e)?;
+        if tag == HANDOFF_STATE {
+            break serde_json::from_slice(&p).map_err(|e| e.to_string())?;
+        }
+    };
+    let mut screens = Vec::with_capacity(state.terms.len());
+    while screens.len() < state.terms.len() {
+        let (tag, _, p) = read_frame(&mut s).map_err(e)?;
+        if tag == SCREEN {
+            screens.push(p);
+        }
+    }
+    let masters = recv_fds(&s, state.terms.len()).map_err(e)?;
+    Ok(Taken { conn: s, state, screens, masters })
 }
 
 impl Holder {
@@ -402,6 +747,9 @@ impl Holder {
         match ev {
             In::Attach(gen, s) => self.attach(gen, s),
             In::Detach(gen) => {
+                if self.handoff.as_ref().is_some_and(|h| h.gen == gen) {
+                    self.abort_handoff();
+                }
                 if self.win.as_ref().is_some_and(|(g, _)| *g == gen) {
                     self.win = None;
                     self.save();
@@ -409,7 +757,14 @@ impl Holder {
             }
             In::Frame(gen, tag, id, p) => {
                 if self.win.as_ref().is_some_and(|(g, _)| *g == gen) {
-                    self.frame(tag, id, &p);
+                    match tag {
+                        HANDOFF if self.handoff.is_none() => self.begin_handoff(gen),
+                        TAKEN if self.handoff.as_ref().is_some_and(|h| h.sent) => {
+                            self.handed = true;
+                            return true;
+                        }
+                        _ => self.frame(tag, id, &p),
+                    }
                 }
             }
             In::Output(id, data) => self.output(id, &data),
@@ -418,7 +773,13 @@ impl Holder {
                     self.send(EXIT, id, &[]);
                     self.save();
                 }
+                self.reader_done(id);
             }
+            In::Stopped(id) => match self.handoff {
+                Some(_) => self.reader_done(id),
+                // It saw the stop just before an aborted handoff drained it.
+                None => self.restart_reader(id),
+            },
             In::Api(req, rtx) => {
                 let r = self.api(&req);
                 let _ = rtx.send(r);
@@ -439,7 +800,9 @@ impl Holder {
             layout: self.layout.clone(),
             terms: self.terms.values().map(|t| t.info.clone()).collect(),
             next_id: self.next_id,
+            build: BUILD.to_string(),
         };
+        self.unseen = self.terms.values().filter(|t| t.info.worked).map(|t| t.info.id).collect();
         for t in self.terms.values_mut() {
             t.info.worked = false;
         }
@@ -529,27 +892,12 @@ impl Holder {
         self.next_id = self.next_id.max(id + 1);
         let env: Vec<(&str, String)> = s.env.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
         let p = pty::spawn(&s.cwd, s.rows, s.cols, &env).map_err(|e| e.to_string())?;
-        let mut r = p.master.try_clone().map_err(|e| e.to_string())?;
-        let tx = self.tx.clone();
-        let mut child = p.child;
-        let shell = child.id() as i32;
-        std::thread::spawn(move || {
-            let mut buf = vec![0u8; 64 * 1024];
-            loop {
-                match r.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if tx.send(In::Output(id, buf[..n].to_vec())).is_err() {
-                            return;
-                        }
-                    }
-                    Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-                    Err(_) => break,
-                }
-            }
-            let _ = child.wait();
-            let _ = tx.send(In::Exit(id));
-        });
+        let r = p.master.try_clone().map_err(|e| e.to_string())?;
+        let shell = p.child.id() as i32;
+        read_term(id, r, Some(shell), self.stop.0, self.tx.clone());
+        if let Some(h) = &mut self.handoff {
+            h.pending.insert(id);
+        }
         let info = TermInfo {
             id,
             view: s.view.clone(),
@@ -567,6 +915,7 @@ impl Holder {
             vt,
             master: p.master,
             shell,
+            ours: true,
             pgid: shell,
             info,
             spawn: s,
@@ -704,6 +1053,133 @@ impl Holder {
             t.info.screen = Some(s.as_str().to_string());
             self.send(STATE, id, s.as_str().as_bytes());
         }
+    }
+}
+
+// ---------------------------------------------------------------- handing over to a new holder
+
+impl Holder {
+    /// The takeover holder (window `gen`) asked for the terminals: stop every reader, so no output
+    /// is read here that the new holder wouldn't see; the rest happens in `finish_handoff`.
+    fn begin_handoff(&mut self, gen: u64) {
+        eprintln!("pmux hold: handing {} terminals over", self.terms.len());
+        // Attaching counted as looking at them; the takeover holder isn't a window.
+        for id in std::mem::take(&mut self.unseen) {
+            if let Some(t) = self.terms.get_mut(&id) {
+                t.info.worked = true;
+            }
+        }
+        self.handoff = Some(Handing { gen, pending: self.terms.keys().copied().collect(), sent: false });
+        unsafe { libc::write(self.stop.1, [1u8].as_ptr().cast(), 1) };
+        self.reader_done(0);
+    }
+
+    /// Terminal `id`'s reader stopped or ended; once all have, send everything over.
+    fn reader_done(&mut self, id: u32) {
+        let Some(h) = &mut self.handoff else { return };
+        h.pending.remove(&id);
+        if h.pending.is_empty() && !h.sent {
+            h.sent = true;
+            if let Err(e) = self.finish_handoff() {
+                eprintln!("pmux hold: handoff: {e}");
+                self.abort_handoff();
+            }
+        }
+    }
+
+    /// Every reader stopped and its output was fed to the screens: send the state, the screens
+    /// and the PTYs. The new holder answers `TAKEN`.
+    fn finish_handoff(&mut self) -> io::Result<()> {
+        self.save();
+        let state = Handoff {
+            layout: self.layout.clone(),
+            next_id: self.next_id,
+            terms: self
+                .terms
+                .values()
+                .map(|t| Handed {
+                    info: t.info.clone(),
+                    spawn: t.spawn.clone(),
+                    title: t.title.clone(),
+                    shell: t.shell,
+                    pgid: t.pgid,
+                    argv: t.argv.clone(),
+                    session: t.session.clone(),
+                    shell_cwd: t.shell_cwd.clone(),
+                })
+                .collect(),
+        };
+        let Some((_, s)) = &mut self.win else { return Err(io::ErrorKind::NotConnected.into()) };
+        write_frame(s, HANDOFF_STATE, 0, &serde_json::to_vec(&state).unwrap())?;
+        for (id, t) in &self.terms {
+            write_frame(s, SCREEN, *id, &t.vt.dump(t.title.as_deref()))?;
+        }
+        let fds: Vec<RawFd> = self.terms.values().map(|t| t.master.as_raw_fd()).collect();
+        send_fds(s, &fds)
+    }
+
+    /// The new holder went away before taking the terminals: carry on reading them here.
+    fn abort_handoff(&mut self) {
+        let Some(h) = self.handoff.take() else { return };
+        eprintln!("pmux hold: handoff failed: keeping the terminals");
+        let mut b = [0u8; 16];
+        while unsafe { libc::read(self.stop.0, b.as_mut_ptr().cast(), b.len()) } > 0 {}
+        // Readers still pending are still running, or about to send `Stopped` (and be restarted
+        // then): restart the ones that stopped.
+        let stopped: Vec<u32> = self.terms.keys().filter(|id| !h.pending.contains(id)).copied().collect();
+        for id in stopped {
+            self.restart_reader(id);
+        }
+    }
+
+    fn restart_reader(&mut self, id: u32) {
+        let Some(t) = self.terms.get(&id) else { return };
+        if let Ok(r) = t.master.try_clone() {
+            read_term(id, r, t.ours.then_some(t.shell), self.stop.0, self.tx.clone());
+        }
+    }
+
+    /// Takeover: serve the terminals the old holder sent, then tell it to go, and wait until it has.
+    fn adopt(&mut self, t: Taken) -> Result<(), String> {
+        let Taken { mut conn, state, screens, masters } = t;
+        let long_ago = Instant::now().checked_sub(Duration::from_secs(60)).unwrap();
+        for ((h, screen), master) in state.terms.into_iter().zip(screens).zip(masters) {
+            let id = h.info.id;
+            let mut vt = Vt::new(h.info.cols as usize, h.info.rows as usize);
+            vt.feed(&screen);
+            let r = master.try_clone().map_err(|e| e.to_string())?;
+            let parsed = h.info.screen.as_deref().and_then(crate::detect::Screen::parse);
+            self.terms.insert(
+                id,
+                Term {
+                    vt,
+                    master,
+                    shell: h.shell,
+                    ours: false,
+                    pgid: h.pgid,
+                    info: h.info,
+                    spawn: h.spawn,
+                    title: h.title,
+                    last_probe: long_ago,
+                    last_output: long_ago,
+                    argv: h.argv,
+                    session: h.session,
+                    screen: parsed,
+                    last_detect: long_ago,
+                    detect_due: false,
+                    shell_cwd: h.shell_cwd,
+                },
+            );
+            read_term(id, r, None, self.stop.0, self.tx.clone());
+        }
+        self.layout = state.layout;
+        self.next_id = state.next_id;
+        write_frame(&mut conn, TAKEN, 0, &[]).map_err(|e| e.to_string())?;
+        // It exits on `TAKEN`, closing the connection; until then it still owns the sockets.
+        let mut b = [0u8; 4096];
+        while matches!(conn.read(&mut b), Ok(n) if n > 0) {}
+        eprintln!("pmux hold: took {} terminals over", self.terms.len());
+        Ok(())
     }
 }
 

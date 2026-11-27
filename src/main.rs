@@ -249,7 +249,7 @@ fn main() {
         None => run(),
         Some("-h" | "--help" | "help") => print!("{USAGE}"),
         Some("guide") => print!("{}", api::GUIDE),
-        Some("hold") => std::process::exit(hold::run()),
+        Some("hold") => std::process::exit(hold::run(&args[1..])),
         Some("import") => std::process::exit(import::main(&args[1..])),
         Some("hook") => std::process::exit(hook::run(&args[1..])),
         // Debugging agent manifests: `pmux detect claude [title] < screen.txt`
