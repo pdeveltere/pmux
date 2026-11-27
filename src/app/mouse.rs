@@ -286,7 +286,7 @@ impl App {
         if let Some(id) = self.term_drag.take() {
             // A plain click leaves no selection behind.
             if let Some(p) = self.panes.get_mut(&id) {
-                if p.vt.term.selection.as_ref().is_some_and(|s| s.is_empty()) {
+                if p.vt.term.selection.as_ref().is_some_and(alacritty_terminal::selection::Selection::is_empty) {
                     p.vt.term.selection = None;
                 }
             }

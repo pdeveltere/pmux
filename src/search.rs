@@ -68,7 +68,7 @@ pub fn run(root: &Path, re: &Regex, cancel: &AtomicBool) -> Option<Found> {
     let next = AtomicUsize::new(0);
     let count = AtomicUsize::new(0);
     let out: Mutex<Vec<(usize, FileHits)>> = Mutex::new(Vec::new());
-    let n = std::thread::available_parallelism().map_or(4, |n| n.get()).min(16);
+    let n = std::thread::available_parallelism().map_or(4, std::num::NonZero::get).min(16);
     std::thread::scope(|s| {
         for _ in 0..n {
             s.spawn(|| loop {

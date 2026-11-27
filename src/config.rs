@@ -102,7 +102,10 @@ mod tests {
 
     #[test]
     fn folder_defaults_to_common_parent() {
-        let ws = |projects: &[&str]| WsCfg { path: None, projects: projects.iter().map(|s| s.to_string()).collect() };
+        let ws = |projects: &[&str]| WsCfg {
+            path: None,
+            projects: projects.iter().map(std::string::ToString::to_string).collect(),
+        };
         assert_eq!(ws(&["/a/b/x", "/a/b/y"]).folder(), PathBuf::from("/a/b"));
         assert_eq!(ws(&["/a/b/x", "/a/c"]).folder(), PathBuf::from("/a"));
         assert_eq!(ws(&["/a/b/x"]).folder(), PathBuf::from("/a/b"));

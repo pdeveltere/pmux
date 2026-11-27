@@ -114,8 +114,8 @@ fn region(s: &str) -> Result<Region, String> {
         "screen" => Region::Screen,
         "after_last_rule" => Region::AfterLastRule,
         "prompt_box" => Region::PromptBox,
-        _ if s.starts_with("bottom(") => Region::Bottom(n("bottom(").ok_or(format!("bad region {s}"))?),
-        _ if s.starts_with("top(") => Region::Top(n("top(").ok_or(format!("bad region {s}"))?),
+        _ if s.starts_with("bottom(") => Region::Bottom(n("bottom(").ok_or_else(|| format!("bad region {s}"))?),
+        _ if s.starts_with("top(") => Region::Top(n("top(").ok_or_else(|| format!("bad region {s}"))?),
         _ => return Err(format!("unknown region {s}")),
     })
 }
@@ -139,7 +139,7 @@ pub fn parse(src: &str) -> Result<Manifest, String> {
     for r in m.rules {
         let state = match r.state.as_str() {
             "unknown" => None,
-            s => Some(Screen::parse(s).ok_or(format!("{}: unknown state {s}", r.id))?),
+            s => Some(Screen::parse(s).ok_or_else(|| format!("{}: unknown state {s}", r.id))?),
         };
         let region = region(&r.region).map_err(|e| format!("{}: {e}", r.id))?;
         rules.push(Rule {
@@ -197,7 +197,7 @@ impl Manifest {
                     let v: Vec<&String> = non_empty().collect();
                     v[v.len().saturating_sub(n)..].iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n")
                 }
-                Region::Top(n) => non_empty().take(n).map(|s| s.as_str()).collect::<Vec<_>>().join("\n"),
+                Region::Top(n) => non_empty().take(n).map(std::string::String::as_str).collect::<Vec<_>>().join("\n"),
                 Region::AfterLastRule => match rules.last() {
                     Some(&i) => lines[i + 1..].join("\n"),
                     None => String::new(),

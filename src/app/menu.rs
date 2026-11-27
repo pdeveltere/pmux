@@ -31,7 +31,7 @@ impl App {
                     v.push(fold(self, proj_key(&pr.path)));
                 }
                 // No separator on top when nothing comes before the path items.
-                v.extend(path_items(&pr.path).into_iter().skip(v.is_empty() as usize));
+                v.extend(path_items(&pr.path).into_iter().skip(usize::from(v.is_empty())));
                 v.extend([sep(), item("Close", Action::Delete(Close::Project(pr.path.clone())))]);
                 v
             }

@@ -13,7 +13,10 @@ const IMPORT_WS: &str = "herdr";
 impl App {
     /// The deepest project or worktree folder containing `dir`.
     fn view_for(&self, dir: &Path) -> Option<PathBuf> {
-        self.projects().flat_map(|p| p.view_paths()).filter(|v| dir.starts_with(v)).max_by_key(|v| v.as_os_str().len())
+        self.projects()
+            .flat_map(super::model::Project::view_paths)
+            .filter(|v| dir.starts_with(v))
+            .max_by_key(|v| v.as_os_str().len())
     }
 
     /// The repo `dir` belongs to (its main checkout, for a linked worktree), else `dir` itself.
@@ -57,7 +60,7 @@ impl App {
     }
 
     /// Open an import's terminals; `repos` maps each existing folder to its repo.
-    pub(super) fn api_import(&mut self, plan: Plan, repos: &HashMap<PathBuf, PathBuf>) -> Reply {
+    pub(super) fn api_import(&mut self, plan: &Plan, repos: &HashMap<PathBuf, PathBuf>) -> Reply {
         // Projects first, so every folder has a view.
         let mut added = Vec::new();
         for it in &plan.items {

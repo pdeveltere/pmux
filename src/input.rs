@@ -4,7 +4,7 @@ use winit::keyboard::{Key, ModifiersState as M, NamedKey};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 
 fn modnum(m: M) -> u8 {
-    1 + m.shift_key() as u8 + 2 * m.alt_key() as u8 + 4 * m.control_key() as u8
+    1 + u8::from(m.shift_key()) + 2 * u8::from(m.alt_key()) + 4 * u8::from(m.control_key())
 }
 
 /// The named key (arrows, Enter, …), if it is one.
@@ -60,23 +60,23 @@ pub fn encode(k: &KeyEvent, m: M, app_cursor: bool, kitty: bool) -> Vec<u8> {
             NamedKey::Enter if kitty && (m.shift_key() || m.control_key()) => out = csi(&format!("13;{}u", modnum(m))),
             NamedKey::Enter => {
                 if m.alt_key() {
-                    out.push(0x1b)
+                    out.push(0x1b);
                 }
-                out.push(b'\r')
+                out.push(b'\r');
             }
             NamedKey::Backspace => {
                 if m.alt_key() {
-                    out.push(0x1b)
+                    out.push(0x1b);
                 }
-                out.push(if m.control_key() { 0x08 } else { 0x7f })
+                out.push(if m.control_key() { 0x08 } else { 0x7f });
             }
             NamedKey::Tab => out = if m.shift_key() { csi("Z") } else { vec![b'\t'] },
             NamedKey::Escape => out.push(0x1b),
             NamedKey::Space => {
                 if m.alt_key() {
-                    out.push(0x1b)
+                    out.push(0x1b);
                 }
-                out.push(if m.control_key() { 0 } else { b' ' })
+                out.push(if m.control_key() { 0 } else { b' ' });
             }
             NamedKey::ArrowUp => out = arrow('A'),
             NamedKey::ArrowDown => out = arrow('B'),

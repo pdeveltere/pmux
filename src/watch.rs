@@ -38,13 +38,13 @@ impl Armed {
         use std::os::unix::ffi::OsStrExt;
         let mut c = p.as_os_str().as_bytes().to_vec();
         c.push(0);
-        let fd = unsafe { libc::open(c.as_ptr() as *const _, libc::O_EVTONLY) };
+        let fd = unsafe { libc::open(c.as_ptr().cast(), libc::O_EVTONLY) };
         if fd < 0 {
             return; // doesn't exist (yet): retried on the next wake
         }
         let flags = libc::NOTE_WRITE | libc::NOTE_DELETE | libc::NOTE_RENAME | libc::NOTE_EXTEND;
         let e = kev(fd as usize, libc::EVFILT_VNODE, libc::EV_ADD | libc::EV_CLEAR, flags);
-        unsafe { libc::kevent(self.kq, &e, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
+        unsafe { libc::kevent(self.kq, &raw const e, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
         self.fds.insert(p.to_path_buf(), fd);
         self.paths.insert(fd, p.to_path_buf());
     }
@@ -77,7 +77,7 @@ impl Watcher {
         let paths: Arc<Mutex<Vec<PathBuf>>> = Arc::default();
         let kq = unsafe { libc::kqueue() };
         let user = kev(1, libc::EVFILT_USER, libc::EV_ADD | libc::EV_CLEAR, 0);
-        unsafe { libc::kevent(kq, &user, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
+        unsafe { libc::kevent(kq, &raw const user, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
         let shared = paths.clone();
         std::thread::spawn(move || {
             let mut armed = Armed { kq, fds: Default::default(), paths: Default::default() };
@@ -89,7 +89,7 @@ impl Watcher {
                 let mut first: Option<std::time::Instant> = None;
                 // Block for the first event, then gather the rest of the burst.
                 loop {
-                    let timeout = if first.is_some() { &settle as *const _ } else { std::ptr::null() };
+                    let timeout = if first.is_some() { &raw const settle } else { std::ptr::null() };
                     let n = unsafe { libc::kevent(kq, std::ptr::null(), 0, out.as_mut_ptr(), 32, timeout) };
                     if n < 0 {
                         if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
@@ -152,7 +152,7 @@ impl Watcher {
         #[cfg(target_os = "macos")]
         {
             let e = kev(1, libc::EVFILT_USER, 0, libc::NOTE_TRIGGER);
-            unsafe { libc::kevent(self.kq, &e, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
+            unsafe { libc::kevent(self.kq, &raw const e, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
         }
     }
 }

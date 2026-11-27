@@ -86,7 +86,7 @@ pub fn default_color(i: usize) -> Rgb {
         _ if i == NamedColor::DimForeground as usize => (0x9a, 0x9a, 0x9e),
         _ if (NamedColor::DimBlack as usize..=NamedColor::DimWhite as usize).contains(&i) => {
             let (r, g, b) = ANSI[i - NamedColor::DimBlack as usize];
-            ((r as u16 * 2 / 3) as u8, (g as u16 * 2 / 3) as u8, (b as u16 * 2 / 3) as u8)
+            ((u16::from(r) * 2 / 3) as u8, (u16::from(g) * 2 / 3) as u8, (u16::from(b) * 2 / 3) as u8)
         }
         _ => (0xdc, 0xdc, 0xde), // foreground, bright foreground
     };
@@ -657,7 +657,7 @@ fn tabs(app: &App, p: &mut Painter) {
         p.rect(R { x: r.x + r.w - line, w: line, h: r.h - if shown { 0.0 } else { line }, ..r }, BORDER);
         let fp = t.panes.get(t.focus).and_then(|id| app.panes.get(id));
         let mut label = fp.map(|pn| short_title(pn.label())).unwrap_or_default();
-        if fp.and_then(|pn| pn.editor.as_ref()).is_some_and(|e| e.modified()) {
+        if fp.and_then(|pn| pn.editor.as_ref()).is_some_and(super::editor::Editor::modified) {
             label.push_str(" ●");
         }
         let mut x = r.x + app.px(12.0);
@@ -801,7 +801,8 @@ fn grid(app: &App, p: &mut Painter, pane: &Pane, body: R, focus: bool) {
                 p.rect(R { x, y: y + (ch / 2.0).round(), w: cw, h: thin }, fg);
             }
             if cell.c != ' ' && cell.c != '\t' {
-                let style = cell.flags.contains(Flags::BOLD) as u8 | (cell.flags.contains(Flags::ITALIC) as u8) << 1;
+                let style =
+                    u8::from(cell.flags.contains(Flags::BOLD)) | u8::from(cell.flags.contains(Flags::ITALIC)) << 1;
                 glyphs.push((cell.c, style, x, y + base, fg));
             }
         }

@@ -39,9 +39,9 @@ pub struct Finder {
 impl Finder {
     /// Index `root` now (blocking); `recent` are absolute paths, most recent first.
     #[cfg(test)]
-    pub fn new(root: PathBuf, recent: &[PathBuf]) -> Self {
-        let mut f = Self::loading(root.clone());
-        f.set_files(list(&root), recent);
+    pub fn new(root: &Path, recent: &[PathBuf]) -> Self {
+        let mut f = Self::loading(root.to_path_buf());
+        f.set_files(list(root), recent);
         f
     }
 
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn indexes_this_repo() {
         let root = std::fs::canonicalize(env!("CARGO_MANIFEST_DIR")).unwrap();
-        let mut f = super::Finder::new(root, &[]);
+        let mut f = super::Finder::new(&root, &[]);
         assert!(f.files.iter().any(|p| p == "src/finder.rs"));
         assert!(!f.files.iter().any(|p| p.starts_with("target/")));
         f.query = "findrs".into();

@@ -240,7 +240,7 @@ impl App {
             }
             (Some(NamedKey::Backspace), _, _) if finding => e.set_query(String::new()),
             (_, _, Some('c')) if finding => {
-                platform::clipboard_set(&e.search.as_ref().map(|s| s.query.clone()).unwrap_or_default())
+                platform::clipboard_set(&e.search.as_ref().map(|s| s.query.clone()).unwrap_or_default());
             }
             (
                 Some(

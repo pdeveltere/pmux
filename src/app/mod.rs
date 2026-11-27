@@ -357,14 +357,14 @@ impl App {
             }
             // Answered when git finishes, so it doesn't hold up the UI thread.
             Ev::Api(req, rtx) if req.args.len() > 2 && req.args[0] == "worktree" && req.args[1] == "rm" => {
-                self.api_worktree_rm(&req.args, rtx)
+                self.api_worktree_rm(&req.args, rtx);
             }
             // Answered once git has looked up the folders' repos, off the UI thread.
             Ev::Api(mut req, rtx) if req.args.len() == 2 && req.args[0] == "import" => {
-                self.start_import(req.args.remove(1), rtx)
+                self.start_import(req.args.remove(1), rtx);
             }
             Ev::Api(req, rtx) => {
-                let r = self.on_api(req);
+                let r = self.on_api(&req);
                 let _ = rtx.send(r);
             }
             Ev::Behind(scope, m) => {
@@ -393,9 +393,9 @@ impl App {
             Ev::Merged { proj, wt, branch, key, how } => self.merged_checked(proj, wt, branch, key, how),
             Ev::WorktreeRemoved(r, res) => self.worktree_removed(r, res),
             Ev::WorktreeAdded(r) => self.worktree_added(r),
-            Ev::FinderFiles(root, files) => self.finder_files(root, files),
+            Ev::FinderFiles(root, files) => self.finder_files(&root, files),
             Ev::ImportReady(plan, repos, rtx) => {
-                let r = self.api_import(plan, &repos);
+                let r = self.api_import(&plan, &repos);
                 let _ = rtx.send(r);
             }
             Ev::Highlighted(id, version, hl) => {

@@ -126,14 +126,14 @@ fn item(t: &Value) -> Option<(String, u32, Item)> {
 /// Gather Herdr's live terminals into a plan for the window.
 pub fn plan(run: bool) -> Result<Plan, String> {
     let ls = hc(&["ls"])?;
-    let addrs: Vec<String> = ls["terminals"]
+    // `hc get` each, in parallel: one process per terminal.
+    let handles: Vec<_> = ls["terminals"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|t| t["address"].as_str().map(String::from))
+        .map(|a| std::thread::spawn(move || hc(&["get", &a])))
         .collect();
-    // `hc get` each, in parallel: one process per terminal.
-    let handles: Vec<_> = addrs.into_iter().map(|a| std::thread::spawn(move || hc(&["get", &a]))).collect();
     let mut got = Vec::new();
     for h in handles {
         if let Ok(Ok(t)) = h.join() {

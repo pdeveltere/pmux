@@ -29,8 +29,8 @@ impl App {
     }
 
     /// The file list for the ⌘P popup is ready (ignored if the popup closed or moved on).
-    pub(super) fn finder_files(&mut self, root: std::path::PathBuf, files: Vec<String>) {
-        if let Some(f) = self.finder.as_mut().filter(|f| f.root == root && f.loading) {
+    pub(super) fn finder_files(&mut self, root: &std::path::Path, files: Vec<String>) {
+        if let Some(f) = self.finder.as_mut().filter(|f| f.root == *root && f.loading) {
             f.set_files(files, &self.recent_files);
         }
     }

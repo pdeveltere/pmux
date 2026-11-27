@@ -16,7 +16,7 @@ impl App {
 
     /// The view `dir` is in (the deepest, when they nest), if it isn't `from`.
     fn follow_target(&self, from: &Path, dir: &Path) -> Option<PathBuf> {
-        let views = self.workspaces.iter().flat_map(|w| w.view_paths());
+        let views = self.workspaces.iter().flat_map(super::model::Workspace::view_paths);
         let to = views.filter(|v| dir.starts_with(v)).max_by_key(|v| v.as_os_str().len())?;
         (to != from).then_some(to)
     }

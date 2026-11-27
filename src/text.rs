@@ -72,7 +72,10 @@ pub struct Fonts {
 
 fn pick(fs: &FontSystem, names: &[&str]) -> Option<String> {
     let db = fs.db();
-    names.iter().find(|n| db.faces().any(|f| f.families.iter().any(|(fam, _)| fam == *n))).map(|s| s.to_string())
+    names
+        .iter()
+        .find(|n| db.faces().any(|f| f.families.iter().any(|(fam, _)| fam == *n)))
+        .map(std::string::ToString::to_string)
 }
 
 /// Zed's default fonts (bundled, OFL): Lilex for buffer/terminal, IBM Plex Sans for UI.
@@ -143,7 +146,7 @@ impl Fonts {
         f
     }
 
-    fn attrs<'a>(fam: &'a str, bold: bool, italic: bool) -> Attrs<'a> {
+    fn attrs(fam: &str, bold: bool, italic: bool) -> Attrs<'_> {
         let fam = match fam {
             "monospace" => Family::Monospace,
             "sans-serif" => Family::SansSerif,
@@ -295,7 +298,7 @@ impl Fonts {
     /// An icon rendered at `pt` points into a square mask. Drawn from its top-left corner.
     pub fn icon(&mut self, icon: &'static Icon, pt: f32) -> Option<Glyph> {
         let px = (pt * self.scale).round() as u32;
-        let key = (icon as *const Icon as usize, px);
+        let key = (std::ptr::from_ref::<Icon>(icon) as usize, px);
         if let Some(g) = self.icons.get(&key) {
             return *g;
         }

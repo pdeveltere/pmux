@@ -23,7 +23,7 @@ pub struct Inst {
     pub misc: [f32; 4],  // kind, corner radius, -, -
 }
 
-const SHADER: &str = r#"
+const SHADER: &str = r"
 struct U { screen: vec2<f32>, atlas: vec2<f32> };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var tex: texture_2d<f32>;
@@ -77,7 +77,7 @@ struct Out {
   }
   return vec4<f32>(t.rgb * t.a, t.a);
 }
-"#;
+";
 
 /// The window surface plus the single pipeline, atlas and instance buffer every frame draws with.
 pub struct Gpu {
@@ -97,7 +97,7 @@ pub struct Gpu {
 }
 
 impl Gpu {
-    pub fn new(window: Arc<Window>) -> Self {
+    pub fn new(window: &Arc<Window>) -> Self {
         let instance =
             wgpu::Instance::new(&wgpu::InstanceDescriptor { backends: wgpu::Backends::PRIMARY, ..Default::default() });
         let surface = instance.create_surface(window.clone()).expect("surface");
@@ -298,12 +298,9 @@ impl Gpu {
     /// Draw a frame. False when the surface was outdated or lost: it's reconfigured, and the
     /// caller should draw again.
     pub fn render(&mut self, insts: &[Inst], clear: [f32; 3]) -> bool {
-        let frame = match self.surface.get_current_texture() {
-            Ok(f) => f,
-            Err(_) => {
-                self.surface.configure(&self.device, &self.config);
-                return false;
-            }
+        let Ok(frame) = self.surface.get_current_texture() else {
+            self.surface.configure(&self.device, &self.config);
+            return false;
         };
         let view = frame.texture.create_view(&Default::default());
         let enc = self.encode(&view, insts, clear);
@@ -330,7 +327,7 @@ impl Gpu {
         let row = (w * 4).div_ceil(256) * 256;
         let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: (row * h) as u64,
+            size: u64::from(row * h),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -376,9 +373,9 @@ impl Gpu {
                     depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: clear[0] as f64,
-                            g: clear[1] as f64,
-                            b: clear[2] as f64,
+                            r: f64::from(clear[0]),
+                            g: f64::from(clear[1]),
+                            b: f64::from(clear[2]),
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,

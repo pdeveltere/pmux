@@ -280,7 +280,7 @@ impl Pane {
         editor: Option<Editor>,
         (cols, rows): (usize, usize),
     ) -> Self {
-        let long_ago = Instant::now() - Duration::from_secs(60);
+        let long_ago = Instant::now().checked_sub(Duration::from_secs(60)).unwrap();
         Pane {
             id,
             vt,
@@ -442,7 +442,7 @@ impl App {
         };
         let mut m = mods;
         m.remove(ModifiersState::SUPER);
-        let code = code + 4 * m.shift_key() as u32 + 8 * m.alt_key() as u32 + 16 * m.control_key() as u32;
+        let code = code + 4 * u32::from(m.shift_key()) + 8 * u32::from(m.alt_key()) + 16 * u32::from(m.control_key());
         let bytes = if mode.contains(TermMode::SGR_MOUSE) {
             format!("\x1b[<{code};{col};{row}{}", if release { 'm' } else { 'M' }).into_bytes()
         } else {

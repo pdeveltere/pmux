@@ -170,11 +170,11 @@ impl App {
                             let root =
                                 format!("{}/", self.workspaces[w].path.display().to_string().trim_end_matches('/'));
                             let done = complete_dir(&format!("{root}{}", p.input));
-                            p.input = done.strip_prefix(&root).map_or(p.input.clone(), str::to_string);
+                            p.input = done.strip_prefix(&root).map_or_else(|| p.input.clone(), str::to_string);
                         }
                     }
                     PromptKind::AddProject(_) | PromptKind::NewWorkspace => p.input = complete_dir(&p.input),
-                    _ => {}
+                    PromptKind::NewWorktree(_) => {}
                 }
             }
             _ => {

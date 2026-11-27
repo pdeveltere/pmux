@@ -203,12 +203,12 @@ mod tests {
     #[test]
     fn ago_and_ticks() {
         let now = Instant::now();
-        let s = now - Duration::from_secs(125);
+        let s = now.checked_sub(Duration::from_secs(125)).unwrap();
         assert_eq!(next_tick(s, now), s + Duration::from_secs(180));
-        let s = now - Duration::from_secs(7300);
+        let s = now.checked_sub(Duration::from_secs(7300)).unwrap();
         assert_eq!(next_tick(s, now), s + Duration::from_secs(10800));
-        assert_eq!(ago(now - Duration::from_secs(30)), "<1m");
-        assert_eq!(ago(now - Duration::from_secs(600)), "10m");
-        assert_eq!(ago(now - Duration::from_secs(3 * 3600)), "3h");
+        assert_eq!(ago(now.checked_sub(Duration::from_secs(30)).unwrap()), "<1m");
+        assert_eq!(ago(now.checked_sub(Duration::from_secs(600)).unwrap()), "10m");
+        assert_eq!(ago(now.checked_sub(Duration::from_secs(3 * 3600)).unwrap()), "3h");
     }
 }

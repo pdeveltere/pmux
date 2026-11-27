@@ -124,7 +124,7 @@ impl App {
     /// it has unsaved changes (git can't see those).
     fn busy_in(&self, wt: &Path) -> bool {
         self.panes_in(wt).iter().filter_map(|id| self.panes.get(id)).any(|p| {
-            p.editor.as_ref().is_some_and(|e| e.modified())
+            p.editor.as_ref().is_some_and(super::super::editor::Editor::modified)
                 || p.state().is_some_and(|s| matches!(s, State::Working | State::Waiting | State::Error))
         })
     }

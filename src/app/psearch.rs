@@ -153,7 +153,7 @@ impl App {
                     return self.run_search(id);
                 }
                 let sel = s.sel;
-                self.open_hit(id, sel)
+                self.open_hit(id, sel);
             }
             (Some(NamedKey::ArrowDown), _) | (_, Some('n')) => s.step(1, vis),
             (Some(NamedKey::ArrowUp), _) | (_, Some('p')) => s.step(-1, vis),

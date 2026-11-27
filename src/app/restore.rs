@@ -63,7 +63,7 @@ impl App {
             let mut p = Pane::new(t.id, &t.view, Vt::new(cols, rows), Some(link.clone()), None, (cols, rows));
             p.set_agent(t.agent.as_deref());
             p.set_screen(t.screen.as_deref().and_then(crate::detect::Screen::parse));
-            p.title = t.meta.title.clone();
+            p.title.clone_from(&t.meta.title);
             p.state = t.meta.state.as_deref().and_then(State::parse);
             p.state_at = Instant::now();
             p.unseen = t.worked && p.agent.is_some();
@@ -100,7 +100,7 @@ impl App {
         }
         // Terminals the layout doesn't know (opened after it was last saved): a tab each.
         let mut rest: Vec<u32> = w.terms.iter().map(|t| t.id).filter(|id| !placed.contains(id)).collect();
-        rest.sort();
+        rest.sort_unstable();
         for id in rest {
             let view = self.panes[&id].view.clone();
             let v = self.views.entry(view).or_default();

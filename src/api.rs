@@ -89,15 +89,15 @@ pub fn serve_at(
     std::thread::spawn(move || {
         for s in l.incoming().flatten() {
             let on = on.clone();
-            std::thread::spawn(move || serve(s, on));
+            std::thread::spawn(move || serve(&s, on));
         }
     });
     Ok(())
 }
 
-fn serve(s: UnixStream, on: impl Fn(Request, std::sync::mpsc::Sender<Reply>) -> bool) {
+fn serve(s: &UnixStream, on: impl Fn(Request, std::sync::mpsc::Sender<Reply>) -> bool) {
     let mut line = String::new();
-    let mut r = BufReader::new(&s);
+    let mut r = BufReader::new(s);
     if r.read_line(&mut line).is_err() {
         return;
     }
@@ -111,7 +111,7 @@ fn serve(s: UnixStream, on: impl Fn(Request, std::sync::mpsc::Sender<Reply>) -> 
         }
         Err(e) => Reply::err(format!("bad request: {e}")),
     };
-    let mut w = &s;
+    let mut w = s;
     let _ = w.write_all(serde_json::to_string(&reply).unwrap().as_bytes());
 }
 

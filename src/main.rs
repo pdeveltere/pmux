@@ -156,7 +156,7 @@ impl ApplicationHandler<Ev> for Runner {
                 app.open_cwd();
             }
         }
-        self.gpu = Some(gpu::Gpu::new(window.clone()));
+        self.gpu = Some(gpu::Gpu::new(&window));
         self.fonts = Some(fonts);
         self.app = Some(app);
         window.request_redraw();

@@ -126,8 +126,8 @@ pub fn rasterize(icon: &Icon, px: u32) -> Vec<u8> {
         let xf = Transform::new(a, b, c, d, e, f).then(&Transform::scale(s, s));
         let (mask, _) = m.transform(Some(xf)).size(px, px).render();
         for (o, a) in out.iter_mut().zip(mask) {
-            let a = a as f32 * l.alpha / 255.0;
-            let b = *o as f32 / 255.0;
+            let a = f32::from(a) * l.alpha / 255.0;
+            let b = f32::from(*o) / 255.0;
             *o = ((b + a * (1.0 - b)) * 255.0).round() as u8;
         }
     }

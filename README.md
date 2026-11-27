@@ -30,6 +30,7 @@ Needs Rust (stable) and Xcode command line tools (for `swift`, `sips`, `iconutil
 ```sh
 tools/install-app.sh          # build and install /Applications/pmux.app
 tools/dist.sh                 # build target/dist/pmux-<version>-macos-<arch>.zip to share
+tools/lint.sh [--fix]         # rustfmt + clippy, warnings fail (CI runs this and `cargo test`)
 ```
 
 ## Usage

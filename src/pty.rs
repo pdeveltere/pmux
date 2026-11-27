@@ -22,8 +22,9 @@ fn ws(rows: u16, cols: u16) -> libc::winsize {
 pub fn spawn(cwd: &Path, rows: u16, cols: u16, env: &[(&str, String)]) -> io::Result<Pty> {
     let (mut m, mut s) = (0, 0);
     let w = ws(rows, cols);
-    if unsafe { libc::openpty(&mut m, &mut s, std::ptr::null_mut(), std::ptr::null_mut(), &w as *const _ as *mut _) }
-        != 0
+    if unsafe {
+        libc::openpty(&raw mut m, &raw mut s, std::ptr::null_mut(), std::ptr::null_mut(), (&raw const w).cast_mut())
+    } != 0
     {
         return Err(io::Error::last_os_error());
     }
@@ -52,7 +53,7 @@ pub fn spawn(cwd: &Path, rows: u16, cols: u16, env: &[(&str, String)]) -> io::Re
     }
     unsafe {
         cmd.pre_exec(|| {
-            if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
+            if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY.into(), 0) < 0 {
                 return Err(io::Error::last_os_error());
             }
             Ok(())
@@ -76,7 +77,7 @@ pub fn fg_pgrp(f: &File) -> i32 {
 #[cfg(target_os = "macos")]
 pub fn proc_path(pid: i32) -> Option<String> {
     let mut buf = vec![0u8; 4096];
-    let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr() as *mut _, buf.len() as u32) };
+    let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
     (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
 }
 
@@ -97,7 +98,7 @@ pub fn proc_args(pid: i32) -> Vec<String> {
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
     let mut buf = vec![0u8; 64 * 1024];
     let mut len = buf.len();
-    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, buf.as_mut_ptr() as *mut _, &mut len, std::ptr::null_mut(), 0) } != 0
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, buf.as_mut_ptr().cast(), &raw mut len, std::ptr::null_mut(), 0) } != 0
         || len < 4
     {
         return vec![];
@@ -125,11 +126,11 @@ pub fn proc_args(pid: i32) -> Vec<String> {
 pub fn proc_cwd(pid: i32) -> Option<std::path::PathBuf> {
     let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as i32;
-    let n = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDVNODEPATHINFO, 0, &mut info as *mut _ as *mut _, size) };
+    let n = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDVNODEPATHINFO, 0, (&raw mut info).cast(), size) };
     if n != size {
         return None;
     }
-    let p = unsafe { std::ffi::CStr::from_ptr(info.pvi_cdir.vip_path.as_ptr() as *const _) };
+    let p = unsafe { std::ffi::CStr::from_ptr(info.pvi_cdir.vip_path.as_ptr().cast()) };
     Some(std::path::PathBuf::from(p.to_string_lossy().into_owned()))
 }
 

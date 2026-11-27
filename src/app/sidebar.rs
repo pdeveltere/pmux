@@ -167,7 +167,7 @@ impl App {
                 (Some('a'), _) => self.prompt_add_project(Some(row.ws())),
                 (Some('W'), _) => self.prompt_new_workspace(),
                 (Some('w'), Row::Proj(w, p) | Row::Wt(w, p, _)) if self.project(w, p).worktrees.is_some() => {
-                    self.prompt_new_worktree(self.project(w, p).path.clone())
+                    self.prompt_new_worktree(self.project(w, p).path.clone());
                 }
                 (Some('w'), _) => self.say("not a git project"),
                 (Some('x'), Row::Wt(..)) => self.say("x closes a project or workspace; right-click deletes a worktree"),
@@ -302,7 +302,7 @@ impl App {
         let parent = match &p.kind {
             PromptKind::AddProject(ws) => self.ws_index(ws).map(Row::Ws),
             PromptKind::NewWorktree(proj) => self.proj_index(proj).map(|(w, p)| Row::Proj(w, p)),
-            _ => None,
+            PromptKind::NewWorkspace => None,
         };
         match parent {
             Some(r) => self.select_row(r),
@@ -343,7 +343,7 @@ impl App {
         let path = std::fs::canonicalize(config::expand(dir.trim()))
             .ok()
             .filter(|p| p.is_dir())
-            .ok_or(format!("not a directory: {dir}"))?;
+            .ok_or_else(|| format!("not a directory: {dir}"))?;
         if let Some(ws) = self.workspaces.iter().find(|w| w.path == path) {
             return Err(format!("{} is already a workspace", ws.name));
         }
@@ -423,7 +423,7 @@ impl App {
         match c {
             Close::Worktree(_, wt) if self.removing.contains(&wt) => self.say(format!("already deleting {name}")),
             Close::Worktree(proj, wt) => {
-                self.start_removal(Removal { proj, wt, name, force: true, reply: None, auto: None })
+                self.start_removal(Removal { proj, wt, name, force: true, reply: None, auto: None });
             }
             c => self.close(c),
         }
@@ -435,7 +435,7 @@ impl App {
         match c {
             // Off the UI thread: removing a big checkout takes a while. The row stays until done.
             Close::Worktree(proj, wt) => {
-                self.start_removal(Removal { proj, wt, name, force: true, reply: None, auto: None })
+                self.start_removal(Removal { proj, wt, name, force: true, reply: None, auto: None });
             }
             Close::Workspace(n) => {
                 if let Some(w) = self.ws_index(&n) {

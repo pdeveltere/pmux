@@ -53,7 +53,7 @@ impl App {
         Reply::ok(format!("closed {name}"))
     }
 
-    pub(super) fn on_api(&mut self, req: Request) -> Reply {
+    pub(super) fn on_api(&mut self, req: &Request) -> Reply {
         let caller = req.caller.as_deref();
         let me = caller.and_then(|c| self.resolve(c, None));
         let a: Vec<&str> = req.args.iter().map(String::as_str).collect();

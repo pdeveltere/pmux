@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn rust_spans() {
         let lines: Vec<String> =
-            ["fn main() {", "    let s = \"hé\"; // note", "}"].iter().map(|s| s.to_string()).collect();
+            ["fn main() {", "    let s = \"hé\"; // note", "}"].iter().map(std::string::ToString::to_string).collect();
         let h = highlight("rust", &lines);
         assert_eq!(name_at(&h[0], 0), Some("keyword"));
         assert_eq!(name_at(&h[0], 3).map(|n| n.starts_with("function")), Some(true));
@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn markdown_injects_code() {
         let lines: Vec<String> =
-            ["# Title", "", "```rust", "let x = 1;", "```"].iter().map(|s| s.to_string()).collect();
+            ["# Title", "", "```rust", "let x = 1;", "```"].iter().map(std::string::ToString::to_string).collect();
         let h = highlight("markdown", &lines);
         assert!(name_at(&h[0], 2).is_some());
         assert_eq!(name_at(&h[3], 0), Some("keyword"));

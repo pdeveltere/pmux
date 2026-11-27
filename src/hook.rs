@@ -104,7 +104,7 @@ pub fn integration(args: &[String]) -> i32 {
     };
     let mut out = serde_json::to_string_pretty(&settings).unwrap();
     out.push('\n');
-    if let Err(e) = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::write(&path, out)) {
+    if let Err(e) = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&path, out)) {
         eprintln!("pmux: {}: {e}", path.display());
         return 1;
     }
@@ -135,7 +135,8 @@ pub fn run(args: &[String]) -> i32 {
     let (Some(args), Ok(pane)) = (args, std::env::var("PMUX_PANE")) else { return 0 };
     // Straight to the background pmux: it keeps these, window open or not.
     let Ok(mut s) = std::os::unix::net::UnixStream::connect(crate::api::hold_sock()) else { return 0 };
-    let req = crate::api::Request { caller: Some(pane), args: args.iter().map(|a| a.to_string()).collect() };
+    let req =
+        crate::api::Request { caller: Some(pane), args: args.iter().map(std::string::ToString::to_string).collect() };
     let mut msg = serde_json::to_string(&req).unwrap();
     msg.push('\n');
     let _ = s.write_all(msg.as_bytes());

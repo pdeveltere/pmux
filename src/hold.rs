@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -157,6 +157,9 @@ pub enum Msg {
 #[derive(Clone)]
 pub struct Link(Arc<Mutex<UnixStream>>);
 
+/// Each terminal's id and its screen contents, as sent when a window attaches.
+pub type Screens = Vec<(u32, Vec<u8>)>;
+
 impl Link {
     fn send(&self, tag: u8, id: u32, payload: &[u8]) {
         if let Ok(mut s) = self.0.lock() {
@@ -187,8 +190,8 @@ impl Link {
     }
 
     /// Attach to the holder, starting it if none runs. Returns the link, the welcome, each
-    /// terminal's screen, and a function that starts forwarding live events.
-    pub fn connect() -> Result<(Link, Welcome, Vec<(u32, Vec<u8>)>, UnixStream), String> {
+    /// terminal's screen, and the stream that live events arrive on.
+    pub fn connect() -> Result<(Link, Welcome, Screens, UnixStream), String> {
         let mut s = match UnixStream::connect(sock_path()) {
             Ok(s) => s,
             Err(_) => start()?,
@@ -406,10 +409,10 @@ impl Holder {
             }
             In::Frame(gen, tag, id, p) => {
                 if self.win.as_ref().is_some_and(|(g, _)| *g == gen) {
-                    self.frame(tag, id, p);
+                    self.frame(tag, id, &p);
                 }
             }
-            In::Output(id, data) => self.output(id, data),
+            In::Output(id, data) => self.output(id, &data),
             In::Exit(id) => {
                 if self.terms.remove(&id).is_some() {
                     self.send(EXIT, id, &[]);
@@ -417,7 +420,7 @@ impl Holder {
                 }
             }
             In::Api(req, rtx) => {
-                let r = self.api(req);
+                let r = self.api(&req);
                 let _ = rtx.send(r);
             }
         }
@@ -458,10 +461,10 @@ impl Holder {
         });
     }
 
-    fn frame(&mut self, tag: u8, id: u32, p: Vec<u8>) {
+    fn frame(&mut self, tag: u8, id: u32, p: &[u8]) {
         match tag {
             SPAWN => {
-                match serde_json::from_slice::<Spawn>(&p).map_err(|e| e.to_string()).and_then(|s| self.spawn(id, s)) {
+                match serde_json::from_slice::<Spawn>(p).map_err(|e| e.to_string()).and_then(|s| self.spawn(id, s)) {
                     Ok(()) => self.save(),
                     Err(e) => {
                         self.send(FAILED, id, e.as_bytes());
@@ -471,7 +474,7 @@ impl Holder {
             }
             INPUT => {
                 if let Some(t) = self.terms.get_mut(&id) {
-                    t.write(&p);
+                    t.write(p);
                 }
             }
             RESIZE if p.len() == 8 => {
@@ -493,17 +496,17 @@ impl Holder {
                 }
             }
             LAYOUT => {
-                self.layout = String::from_utf8_lossy(&p).into_owned();
+                self.layout = String::from_utf8_lossy(p).into_owned();
                 self.save();
             }
             META => {
-                if let (Some(t), Ok(m)) = (self.terms.get_mut(&id), serde_json::from_slice(&p)) {
+                if let (Some(t), Ok(m)) = (self.terms.get_mut(&id), serde_json::from_slice(p)) {
                     t.info.meta = m;
                     self.save();
                 }
             }
             VIEW => {
-                if let (Some(t), Ok(m)) = (self.terms.get_mut(&id), serde_json::from_slice::<Moved>(&p)) {
+                if let (Some(t), Ok(m)) = (self.terms.get_mut(&id), serde_json::from_slice::<Moved>(p)) {
                     t.info.view = m.view.clone();
                     t.spawn.view = m.view;
                     for (k, v) in m.env {
@@ -558,7 +561,7 @@ impl Holder {
             screen: None,
             cwd: None,
         };
-        let long_ago = Instant::now() - Duration::from_secs(60);
+        let long_ago = Instant::now().checked_sub(Duration::from_secs(60)).unwrap();
         let vt = Vt::new(s.cols as usize, s.rows as usize);
         let t = Term {
             vt,
@@ -581,14 +584,14 @@ impl Holder {
         Ok(())
     }
 
-    fn output(&mut self, id: u32, data: Vec<u8>) {
+    fn output(&mut self, id: u32, data: &[u8]) {
         let attached = self.win.is_some();
         let Some(t) = self.terms.get_mut(&id) else { return };
         t.last_output = Instant::now();
         if !attached && t.info.agent.is_some() {
             t.info.worked = true;
         }
-        for e in t.vt.feed(&data) {
+        for e in t.vt.feed(data) {
             match e {
                 TEvent::PtyWrite(s) => t.write(s.as_bytes()),
                 TEvent::Title(s) => t.title = Some(s),
@@ -609,7 +612,7 @@ impl Holder {
         t.detect_due = true;
         let now = Instant::now();
         let next = t.last_detect + DETECT_EVERY;
-        self.send(OUTPUT, id, &data);
+        self.send(OUTPUT, id, data);
         if now - self.terms[&id].last_probe > PROBE_EVERY {
             self.probe(id);
         }
@@ -634,7 +637,7 @@ impl Holder {
                 let a = pty::proc_path(pg).as_deref().and_then(pty::agent_of).map(String::from);
                 if a != t.info.agent {
                     t.argv = if a.is_some() { pty::proc_args(pg) } else { vec![] };
-                    t.info.agent = a.clone();
+                    t.info.agent.clone_from(&a);
                     t.info.meta.state = None;
                     t.info.worked = false;
                     // The hook may report the session before the agent is seen here: keep it
@@ -658,19 +661,19 @@ impl Holder {
         if t.info.agent.is_none() && t.pgid == t.shell {
             if let Some(cwd) = pty::proc_cwd(t.shell) {
                 if t.shell_cwd.replace(cwd.clone()).is_some_and(|old| old != cwd) {
-                    self.set_cwd(id, cwd);
+                    self.set_cwd(id, &cwd);
                 }
             }
         }
     }
 
     /// The terminal works in `dir` now: tell the window, which moves its tab to that worktree.
-    fn set_cwd(&mut self, id: u32, dir: PathBuf) {
+    fn set_cwd(&mut self, id: u32, dir: &Path) {
         let Some(t) = self.terms.get_mut(&id) else { return };
-        if t.info.cwd.as_ref() == Some(&dir) {
+        if t.info.cwd.as_deref() == Some(dir) {
             return;
         }
-        t.info.cwd = Some(dir.clone());
+        t.info.cwd = Some(dir.to_path_buf());
         self.send(CWD, id, dir.as_os_str().as_encoded_bytes());
     }
 
@@ -767,13 +770,13 @@ impl Holder {
 
     /// `pmux <command>` while no window is open: everything about terminals; nothing about the
     /// sidebar, editors or the screen.
-    fn api(&mut self, req: crate::api::Request) -> crate::api::Reply {
+    fn api(&mut self, req: &crate::api::Request) -> crate::api::Reply {
         use crate::api::Reply;
         let caller = req.caller.as_deref();
         let me = caller.and_then(|c| self.resolve(c, None));
         let a: Vec<&str> = req.args.iter().map(String::as_str).collect();
         match a.as_slice() {
-            ["ls", ..] | ["tree", ..] => Reply::ok(self.terms.values().map(|t| t.line(me) + "\n").collect::<String>()),
+            ["ls" | "tree", ..] => Reply::ok(self.terms.values().map(|t| t.line(me) + "\n").collect::<String>()),
             ["whoami", ..] => match me.and_then(|id| self.terms.get(&id)) {
                 Some(t) => Reply::ok(t.line(None)),
                 None => Reply::err("not inside a pmux pane"),
@@ -826,7 +829,7 @@ impl Holder {
             ["agent-cwd", _agent, dir] => match me {
                 Some(id) => {
                     let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| PathBuf::from(dir));
-                    self.set_cwd(id, dir);
+                    self.set_cwd(id, &dir);
                     Reply::ok("")
                 }
                 None => Reply::err("not inside a pmux pane"),
@@ -944,7 +947,7 @@ impl Holder {
         // No hook installed: Claude also records its session id under its pid.
         for t in self.terms.values_mut() {
             if t.session.is_none() && t.info.agent.as_deref() == Some("claude") {
-                t.session = crate::import::session_id(t.pgid as i64);
+                t.session = crate::import::session_id(i64::from(t.pgid));
             }
         }
         let terms = self
