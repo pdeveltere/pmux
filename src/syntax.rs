@@ -98,7 +98,11 @@ fn canonical(name: &str) -> Option<&'static str> {
 fn build(name: &'static str) -> Option<HighlightConfiguration> {
     let ts_js = || format!("{}\n{}", tree_sitter_typescript::HIGHLIGHTS_QUERY, tree_sitter_javascript::HIGHLIGHT_QUERY);
     let (lang, hl, inj): (tree_sitter::Language, String, &str) = match name {
-        "rust" => (tree_sitter_rust::LANGUAGE.into(), tree_sitter_rust::HIGHLIGHTS_QUERY.into(), tree_sitter_rust::INJECTIONS_QUERY),
+        "rust" => (
+            tree_sitter_rust::LANGUAGE.into(),
+            tree_sitter_rust::HIGHLIGHTS_QUERY.into(),
+            tree_sitter_rust::INJECTIONS_QUERY,
+        ),
         "toml" => (tree_sitter_toml_ng::LANGUAGE.into(), tree_sitter_toml_ng::HIGHLIGHTS_QUERY.into(), ""),
         "json" => (tree_sitter_json::LANGUAGE.into(), tree_sitter_json::HIGHLIGHTS_QUERY.into(), ""),
         "javascript" => (
@@ -107,13 +111,27 @@ fn build(name: &'static str) -> Option<HighlightConfiguration> {
             tree_sitter_javascript::INJECTIONS_QUERY,
         ),
         "typescript" => (tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(), ts_js(), ""),
-        "tsx" => (tree_sitter_typescript::LANGUAGE_TSX.into(), format!("{}\n{}", tree_sitter_javascript::JSX_HIGHLIGHT_QUERY, ts_js()), ""),
+        "tsx" => (
+            tree_sitter_typescript::LANGUAGE_TSX.into(),
+            format!("{}\n{}", tree_sitter_javascript::JSX_HIGHLIGHT_QUERY, ts_js()),
+            "",
+        ),
         "bash" => (tree_sitter_bash::LANGUAGE.into(), tree_sitter_bash::HIGHLIGHT_QUERY.into(), ""),
-        "markdown" => (tree_sitter_md::LANGUAGE.into(), tree_sitter_md::HIGHLIGHT_QUERY_BLOCK.into(), tree_sitter_md::INJECTION_QUERY_BLOCK),
-        "markdown_inline" => (tree_sitter_md::INLINE_LANGUAGE.into(), tree_sitter_md::HIGHLIGHT_QUERY_INLINE.into(), tree_sitter_md::INJECTION_QUERY_INLINE),
+        "markdown" => (
+            tree_sitter_md::LANGUAGE.into(),
+            tree_sitter_md::HIGHLIGHT_QUERY_BLOCK.into(),
+            tree_sitter_md::INJECTION_QUERY_BLOCK,
+        ),
+        "markdown_inline" => (
+            tree_sitter_md::INLINE_LANGUAGE.into(),
+            tree_sitter_md::HIGHLIGHT_QUERY_INLINE.into(),
+            tree_sitter_md::INJECTION_QUERY_INLINE,
+        ),
         _ => return None,
     };
-    let mut c = HighlightConfiguration::new(lang, name, &hl, inj, "").map_err(|e| eprintln!("pmux: {name} highlights: {e}")).ok()?;
+    let mut c = HighlightConfiguration::new(lang, name, &hl, inj, "")
+        .map_err(|e| eprintln!("pmux: {name} highlights: {e}"))
+        .ok()?;
     c.configure(NAMES);
     Some(c)
 }
@@ -127,7 +145,12 @@ fn config(name: &str) -> Option<&'static HighlightConfiguration> {
 }
 
 /// Run the highlighter; the explicit `'a` lets the 'static configs shorten to the source's lifetime.
-fn run<'a>(hl: &'a mut Highlighter, cfg: &'a HighlightConfiguration, src: &'a str) -> Result<impl Iterator<Item = Result<HighlightEvent, tree_sitter_highlight::Error>> + 'a, tree_sitter_highlight::Error> {
+fn run<'a>(
+    hl: &'a mut Highlighter,
+    cfg: &'a HighlightConfiguration,
+    src: &'a str,
+) -> Result<impl Iterator<Item = Result<HighlightEvent, tree_sitter_highlight::Error>> + 'a, tree_sitter_highlight::Error>
+{
     hl.highlight(cfg, src.as_bytes(), None, None, |n| -> Option<&'a HighlightConfiguration> { config(n) })
 }
 
@@ -199,7 +222,8 @@ mod tests {
 
     #[test]
     fn rust_spans() {
-        let lines: Vec<String> = ["fn main() {", "    let s = \"hé\"; // note", "}"].iter().map(|s| s.to_string()).collect();
+        let lines: Vec<String> =
+            ["fn main() {", "    let s = \"hé\"; // note", "}"].iter().map(|s| s.to_string()).collect();
         let h = highlight("rust", &lines);
         assert_eq!(name_at(&h[0], 0), Some("keyword"));
         assert_eq!(name_at(&h[0], 3).map(|n| n.starts_with("function")), Some(true));
@@ -210,7 +234,8 @@ mod tests {
 
     #[test]
     fn markdown_injects_code() {
-        let lines: Vec<String> = ["# Title", "", "```rust", "let x = 1;", "```"].iter().map(|s| s.to_string()).collect();
+        let lines: Vec<String> =
+            ["# Title", "", "```rust", "let x = 1;", "```"].iter().map(|s| s.to_string()).collect();
         let h = highlight("markdown", &lines);
         assert!(name_at(&h[0], 2).is_some());
         assert_eq!(name_at(&h[3], 0), Some("keyword"));

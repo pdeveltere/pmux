@@ -182,7 +182,10 @@ impl App {
         let rel = path.strip_prefix(&e.root).map(|r| r.display().to_string()).unwrap_or_default();
         let mut items: Vec<MenuItem> = if en.dir {
             let label = if e.is_open(i) { "Collapse" } else { "Expand" };
-            vec![item(label, Action::FileToggle(path.clone())), item("New terminal here", Action::Terminal(path.clone()))]
+            vec![
+                item(label, Action::FileToggle(path.clone())),
+                item("New terminal here", Action::Terminal(path.clone())),
+            ]
         } else {
             let parent = path.parent().map_or_else(|| e.root.clone(), Path::to_path_buf);
             vec![

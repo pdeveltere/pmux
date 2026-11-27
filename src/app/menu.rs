@@ -8,12 +8,15 @@ impl App {
     /// Context menu for sidebar row `row` (or the empty area below the rows).
     pub(super) fn open_sidebar_menu(&mut self, row: Option<usize>, x: f32, y: f32) {
         let rows = self.rows();
-        let fold = |app: &Self, key: String| item(if app.folded.contains(&key) { "Expand" } else { "Collapse" }, Action::Toggle(key));
+        let fold = |app: &Self, key: String| {
+            item(if app.folded.contains(&key) { "Expand" } else { "Collapse" }, Action::Toggle(key))
+        };
         let items: Vec<MenuItem> = match row.and_then(|i| rows.get(i).copied()) {
             Some(Row::Ws(w)) => {
                 let ws = &self.workspaces[w];
                 let name = ws.name.clone();
-                let mut v = vec![item("New project…", Action::AddProject(Some(name.clone()))), fold(self, ws_key(&name))];
+                let mut v =
+                    vec![item("New project…", Action::AddProject(Some(name.clone()))), fold(self, ws_key(&name))];
                 v.extend(path_items(&ws.path));
                 v.extend([sep(), item("Close", Action::Delete(Close::Workspace(name)))]);
                 v
@@ -39,7 +42,10 @@ impl App {
                 v.extend(path_items(&wt.path));
                 // Not while it's already being deleted: the row says "deleting…".
                 if !wt.main && !self.removing.contains(&wt.path) {
-                    v.extend([sep(), item("Delete worktree", Action::Delete(Close::Worktree(pr.path.clone(), wt.path.clone())))]);
+                    v.extend([
+                        sep(),
+                        item("Delete worktree", Action::Delete(Close::Worktree(pr.path.clone(), wt.path.clone()))),
+                    ]);
                 }
                 v
             }
@@ -129,5 +135,9 @@ impl App {
 
 /// "Copy path" / "Reveal" items for a folder, after a separator.
 fn path_items(p: &std::path::Path) -> [MenuItem; 3] {
-    [sep(), item("Copy path", Action::CopyPath(p.to_path_buf())), item(platform::REVEAL_LABEL, Action::Reveal(p.to_path_buf()))]
+    [
+        sep(),
+        item("Copy path", Action::CopyPath(p.to_path_buf())),
+        item(platform::REVEAL_LABEL, Action::Reveal(p.to_path_buf())),
+    ]
 }

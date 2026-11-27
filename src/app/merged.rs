@@ -41,7 +41,8 @@ impl App {
             .projects()
             .map(|p| {
                 let wts = p.worktrees.iter().flatten().filter(|w| views.contains(&w.path)).map(|w| {
-                    let candidate = !w.main && !w.branch.starts_with('@') && !super::model::is_default_branch(&w.branch);
+                    let candidate =
+                        !w.main && !w.branch.starts_with('@') && !super::model::is_default_branch(&w.branch);
                     (w.path.clone(), w.branch.clone(), candidate.then(|| self.merge_keys.get(&w.path).cloned()))
                 });
                 (p.path.clone(), wts.collect::<Vec<_>>())
@@ -76,9 +77,17 @@ impl App {
         });
     }
 
-    pub(super) fn merged_checked(&mut self, proj: PathBuf, wt: PathBuf, branch: String, key: String, how: Option<git::Merge>) {
+    pub(super) fn merged_checked(
+        &mut self,
+        proj: PathBuf,
+        wt: PathBuf,
+        branch: String,
+        key: String,
+        how: Option<git::Merge>,
+    ) {
         // Gone or switched branch meanwhile: the verdict is about something else.
-        let current = self.projects().flat_map(|p| p.worktrees.iter().flatten()).any(|w| w.path == wt && w.branch == branch);
+        let current =
+            self.projects().flat_map(|p| p.worktrees.iter().flatten()).any(|w| w.path == wt && w.branch == branch);
         if !current {
             return;
         }
@@ -115,7 +124,8 @@ impl App {
     /// it has unsaved changes (git can't see those).
     fn busy_in(&self, wt: &Path) -> bool {
         self.panes_in(wt).iter().filter_map(|id| self.panes.get(id)).any(|p| {
-            p.editor.as_ref().is_some_and(|e| e.modified()) || p.state().is_some_and(|s| matches!(s, State::Working | State::Waiting | State::Error))
+            p.editor.as_ref().is_some_and(|e| e.modified())
+                || p.state().is_some_and(|s| matches!(s, State::Working | State::Waiting | State::Error))
         })
     }
 

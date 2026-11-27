@@ -52,7 +52,9 @@ impl Reply {
 
 /// Sockets live here. `PMUX_RUNTIME_DIR` moves them (a separate pmux, e.g. for testing).
 pub fn sock_dir() -> PathBuf {
-    std::env::var_os("PMUX_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(format!("/tmp/pmux-{}", unsafe { libc::getuid() })))
+    std::env::var_os("PMUX_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(format!("/tmp/pmux-{}", unsafe { libc::getuid() })))
 }
 
 /// Bind the window's API socket and serve it on a thread: each request goes to the event loop as
@@ -78,7 +80,10 @@ pub fn hold_sock() -> PathBuf {
 }
 
 /// Answer requests on `path`: `on` gets each one with a channel for its reply (false: shutting down).
-pub fn serve_at(path: &std::path::Path, on: impl Fn(Request, std::sync::mpsc::Sender<Reply>) -> bool + Send + Clone + 'static) -> std::io::Result<()> {
+pub fn serve_at(
+    path: &std::path::Path,
+    on: impl Fn(Request, std::sync::mpsc::Sender<Reply>) -> bool + Send + Clone + 'static,
+) -> std::io::Result<()> {
     let _ = std::fs::remove_file(path);
     let l = UnixListener::bind(path)?;
     std::thread::spawn(move || {

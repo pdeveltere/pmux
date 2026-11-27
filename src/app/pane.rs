@@ -130,7 +130,11 @@ impl Pane {
         if let Some(s) = &self.search {
             return s.title();
         }
-        self.title.clone().or_else(|| self.osc_title.clone()).or(self.agent.map(String::from)).unwrap_or_else(|| "shell".into())
+        self.title
+            .clone()
+            .or_else(|| self.osc_title.clone())
+            .or(self.agent.map(String::from))
+            .unwrap_or_else(|| "shell".into())
     }
 
     /// The agent's name, or "shell".
@@ -230,7 +234,10 @@ impl App {
         let (cols, rows) = self.grid_size(body);
         let link = self.link()?;
         let env = env.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
-        link.spawn(id, &Spawn { cwd: cwd.to_path_buf(), view: view.to_path_buf(), rows: rows as u16, cols: cols as u16, env });
+        link.spawn(
+            id,
+            &Spawn { cwd: cwd.to_path_buf(), view: view.to_path_buf(), rows: rows as u16, cols: cols as u16, env },
+        );
         let pane = Pane::new(id, view, Vt::new(cols, rows), Some(link), None, (cols, rows));
         self.insert_pane(pane, view, new_tab);
         Ok(id)
@@ -265,7 +272,14 @@ impl App {
 }
 
 impl Pane {
-    pub(super) fn new(id: u32, view: &Path, vt: Vt, link: Option<Link>, editor: Option<Editor>, (cols, rows): (usize, usize)) -> Self {
+    pub(super) fn new(
+        id: u32,
+        view: &Path,
+        vt: Vt,
+        link: Option<Link>,
+        editor: Option<Editor>,
+        (cols, rows): (usize, usize),
+    ) -> Self {
         let long_ago = Instant::now() - Duration::from_secs(60);
         Pane {
             id,
@@ -387,7 +401,12 @@ impl App {
                     p.write(f(rgb).as_bytes());
                 }
                 TEvent::TextAreaSizeRequest(f) => {
-                    let ws = WindowSize { num_lines: p.rows as u16, num_cols: p.cols as u16, cell_width: cw, cell_height: ch };
+                    let ws = WindowSize {
+                        num_lines: p.rows as u16,
+                        num_cols: p.cols as u16,
+                        cell_width: cw,
+                        cell_height: ch,
+                    };
                     p.write(f(ws).as_bytes());
                 }
                 TEvent::ClipboardStore(_, s) => platform::clipboard_set(&s),
@@ -403,7 +422,8 @@ impl App {
         let (cw, ch, mods) = (self.cell_w, self.cell_h, self.mods);
         let Some(p) = self.panes.get_mut(&id) else { return };
         let mode = p.vt.mode();
-        let cell = |v: f32, size: f32, n: usize| ((v / size).floor().max(0.0) as usize).min(n.saturating_sub(1)) as u32 + 1;
+        let cell =
+            |v: f32, size: f32, n: usize| ((v / size).floor().max(0.0) as usize).min(n.saturating_sub(1)) as u32 + 1;
         let col = cell(x - pr.body.x, cw, p.cols);
         let row = cell(y - pr.body.y, ch, p.rows);
         let btn = |b: MouseButton| match b {
@@ -465,6 +485,11 @@ mod tests {
             assert_eq!(State::parse(s.as_str()), Some(s));
         }
         assert_eq!(State::parse("clear"), None);
-        assert!(State::Waiting > State::Error && State::Error > State::Working && State::Working > State::Done && State::Done > State::Idle);
+        assert!(
+            State::Waiting > State::Error
+                && State::Error > State::Working
+                && State::Working > State::Done
+                && State::Done > State::Idle
+        );
     }
 }

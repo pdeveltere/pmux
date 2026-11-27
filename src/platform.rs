@@ -10,7 +10,8 @@ pub const REVEAL_LABEL: &str = if MACOS { "Reveal in Finder" } else { "Open fold
 
 /// Clipboard text (`pbpaste`, else `wl-paste` / `xclip`).
 pub fn clipboard_get() -> Option<String> {
-    let cmds: &[&[&str]] = if MACOS { &[&["pbpaste"]] } else { &[&["wl-paste", "-n"], &["xclip", "-o", "-selection", "clipboard"]] };
+    let cmds: &[&[&str]] =
+        if MACOS { &[&["pbpaste"]] } else { &[&["wl-paste", "-n"], &["xclip", "-o", "-selection", "clipboard"]] };
     cmds.iter().find_map(|c| {
         let o = Command::new(c[0]).args(&c[1..]).output().ok()?;
         o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())

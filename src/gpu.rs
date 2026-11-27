@@ -98,7 +98,8 @@ pub struct Gpu {
 
 impl Gpu {
     pub fn new(window: Arc<Window>) -> Self {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor { backends: wgpu::Backends::PRIMARY, ..Default::default() });
+        let instance =
+            wgpu::Instance::new(&wgpu::InstanceDescriptor { backends: wgpu::Backends::PRIMARY, ..Default::default() });
         let surface = instance.create_surface(window.clone()).expect("surface");
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::LowPower,
@@ -106,7 +107,8 @@ impl Gpu {
             force_fallback_adapter: false,
         }))
         .expect("no GPU adapter");
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("device");
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("device");
         let caps = surface.get_capabilities(&adapter);
         // Blend in sRGB space (like native terminals): pick a non-sRGB surface format.
         let format = caps.formats.iter().copied().find(|f| !f.is_srgb()).unwrap_or(caps.formats[0]);
@@ -137,7 +139,11 @@ impl Gpu {
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
@@ -159,8 +165,15 @@ impl Gpu {
             ],
         });
         let bind = Self::bind_group(&device, &bgl, &uniform, &atlas, &sampler);
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[&bgl], push_constant_ranges: &[] });
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&bgl],
+            push_constant_ranges: &[],
+        });
         let attrs = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4];
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
@@ -193,7 +206,21 @@ impl Gpu {
         });
         let inst_cap = 4096;
         let inst = Self::inst_buffer(&device, inst_cap);
-        Gpu { surface, device, queue, config, pipeline, bind, bgl, sampler, uniform, atlas, atlas_size: ATLAS, inst, inst_cap }
+        Gpu {
+            surface,
+            device,
+            queue,
+            config,
+            pipeline,
+            bind,
+            bgl,
+            sampler,
+            uniform,
+            atlas,
+            atlas_size: ATLAS,
+            inst,
+            inst_cap,
+        }
     }
 
     fn atlas_texture(device: &wgpu::Device, size: u32) -> wgpu::Texture {
@@ -209,7 +236,13 @@ impl Gpu {
         })
     }
 
-    fn bind_group(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout, uniform: &wgpu::Buffer, atlas: &wgpu::Texture, sampler: &wgpu::Sampler) -> wgpu::BindGroup {
+    fn bind_group(
+        device: &wgpu::Device,
+        bgl: &wgpu::BindGroupLayout,
+        uniform: &wgpu::Buffer,
+        atlas: &wgpu::Texture,
+        sampler: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
         let view = atlas.create_view(&Default::default());
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
@@ -250,7 +283,12 @@ impl Gpu {
     /// Copy an RGBA image into the atlas.
     pub fn upload(&self, x: u32, y: u32, w: u32, h: u32, rgba: &[u8]) {
         self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &self.atlas, mip_level: 0, origin: wgpu::Origin3d { x, y, z: 0 }, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.atlas,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
             rgba,
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
@@ -298,7 +336,10 @@ impl Gpu {
         });
         enc.copy_texture_to_buffer(
             tex.as_image_copy(),
-            wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buf,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) },
+            },
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         );
         self.queue.submit([enc.finish()]);
@@ -334,7 +375,12 @@ impl Gpu {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: clear[0] as f64, g: clear[1] as f64, b: clear[2] as f64, a: 1.0 }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: clear[0] as f64,
+                            g: clear[1] as f64,
+                            b: clear[2] as f64,
+                            a: 1.0,
+                        }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],

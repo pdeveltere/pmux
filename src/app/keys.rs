@@ -167,7 +167,8 @@ impl App {
                     // A new project's name is relative to its workspace's folder.
                     PromptKind::AddProject(ws) if !p.input.starts_with(['/', '~']) => {
                         if let Some(w) = self.ws_index(ws) {
-                            let root = format!("{}/", self.workspaces[w].path.display().to_string().trim_end_matches('/'));
+                            let root =
+                                format!("{}/", self.workspaces[w].path.display().to_string().trim_end_matches('/'));
                             let done = complete_dir(&format!("{root}{}", p.input));
                             p.input = done.strip_prefix(&root).map_or(p.input.clone(), str::to_string);
                         }

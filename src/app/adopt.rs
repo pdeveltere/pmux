@@ -19,7 +19,11 @@ impl App {
     /// The repo `dir` belongs to (its main checkout, for a linked worktree), else `dir` itself.
     /// Runs git: call off the UI thread.
     fn repo_of(dir: &Path) -> PathBuf {
-        let out = std::process::Command::new("git").arg("-C").arg(dir).args(["rev-parse", "--path-format=absolute", "--git-common-dir"]).output();
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+            .output();
         match out {
             Ok(o) if o.status.success() => {
                 let common = PathBuf::from(String::from_utf8_lossy(&o.stdout).trim());

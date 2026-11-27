@@ -14,7 +14,8 @@ impl Workspace {
     pub fn new(path: PathBuf, projects: Vec<Project>, taken: &[Workspace]) -> Self {
         let base = util::file_name(&path);
         let free = |n: &String| !taken.iter().any(|w| &w.name == n);
-        let name = (1..).map(|i| if i == 1 { base.clone() } else { format!("{base} {i}") }).find(free).expect("a free name");
+        let name =
+            (1..).map(|i| if i == 1 { base.clone() } else { format!("{base} {i}") }).find(free).expect("a free name");
         Workspace { name, path, projects }
     }
 

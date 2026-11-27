@@ -3,7 +3,9 @@
 //! UI text (sidebar, headers) is shaped with cosmic-text and cached per string.
 use crate::gpu::{ATLAS, ATLAS_MAX};
 use crate::icons::{self, Icon};
-use cosmic_text::{Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, Style, SwashCache, SwashContent, Weight};
+use cosmic_text::{
+    Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, Style, SwashCache, SwashContent, Weight,
+};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -94,8 +96,26 @@ impl Fonts {
         for f in BUNDLED {
             fs.db_mut().load_font_data(f.to_vec());
         }
-        let mono = pick(&fs, &["Lilex", "JetBrains Mono", "SF Mono", "Menlo", "DejaVu Sans Mono", "Consolas", "Liberation Mono"]).unwrap_or_else(|| "monospace".into());
-        let ui = pick(&fs, &["IBM Plex Sans", "Inter", "SF Pro Text", "SF Pro", "Helvetica Neue", "Segoe UI", "Cantarell", "Noto Sans", "DejaVu Sans"]).unwrap_or_else(|| "sans-serif".into());
+        let mono = pick(
+            &fs,
+            &["Lilex", "JetBrains Mono", "SF Mono", "Menlo", "DejaVu Sans Mono", "Consolas", "Liberation Mono"],
+        )
+        .unwrap_or_else(|| "monospace".into());
+        let ui = pick(
+            &fs,
+            &[
+                "IBM Plex Sans",
+                "Inter",
+                "SF Pro Text",
+                "SF Pro",
+                "Helvetica Neue",
+                "Segoe UI",
+                "Cantarell",
+                "Noto Sans",
+                "DejaVu Sans",
+            ],
+        )
+        .unwrap_or_else(|| "sans-serif".into());
         let mut f = Fonts {
             fs,
             swash: SwashCache::new(),
@@ -129,10 +149,11 @@ impl Fonts {
             "sans-serif" => Family::SansSerif,
             n => Family::Name(n),
         };
-        Attrs::new()
-            .family(fam)
-            .weight(if bold { Weight::BOLD } else { Weight::NORMAL })
-            .style(if italic { Style::Italic } else { Style::Normal })
+        Attrs::new().family(fam).weight(if bold { Weight::BOLD } else { Weight::NORMAL }).style(if italic {
+            Style::Italic
+        } else {
+            Style::Normal
+        })
     }
 
     /// Recompute cell metrics and drop every cache (scale or font size changed).
@@ -299,4 +320,3 @@ impl Fonts {
         false
     }
 }
-

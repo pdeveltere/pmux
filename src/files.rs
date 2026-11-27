@@ -36,7 +36,15 @@ pub struct Explorer {
 
 impl Explorer {
     pub fn new(root: PathBuf) -> Self {
-        let mut e = Explorer { open: HashSet::from([root.clone()]), root, entries: vec![], sel: 0, top: 0, status: git::Status::default(), last_click: None };
+        let mut e = Explorer {
+            open: HashSet::from([root.clone()]),
+            root,
+            entries: vec![],
+            sel: 0,
+            top: 0,
+            status: git::Status::default(),
+            last_click: None,
+        };
         e.rebuild();
         e
     }
@@ -44,7 +52,8 @@ impl Explorer {
     /// Re-read the expanded folders. Keeps the selection on the same path when it still exists.
     pub fn rebuild(&mut self) {
         let keep = self.entries.get(self.sel).map(|e| e.path.clone());
-        let mut out = vec![Entry { path: self.root.clone(), name: util::file_name(&self.root), dir: true, link: None, depth: 0 }];
+        let mut out =
+            vec![Entry { path: self.root.clone(), name: util::file_name(&self.root), dir: true, link: None, depth: 0 }];
         if self.open.contains(&self.root) {
             walk(&self.root, 1, &self.open, &mut out);
         }
@@ -106,12 +115,16 @@ fn walk(dir: &Path, depth: usize, open: &HashSet<PathBuf>, out: &mut Vec<Entry>)
                 return None;
             }
             let ft = e.file_type().ok()?;
-            let link = ft.is_symlink().then(|| std::fs::canonicalize(e.path()).or_else(|_| std::fs::read_link(e.path())).unwrap_or_default());
+            let link = ft
+                .is_symlink()
+                .then(|| std::fs::canonicalize(e.path()).or_else(|_| std::fs::read_link(e.path())).unwrap_or_default());
             let is_dir = if link.is_some() { e.path().is_dir() } else { ft.is_dir() };
             Some((name, is_dir, link))
         })
         .collect();
-    items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())).then_with(|| a.0.cmp(&b.0)));
+    items.sort_by(|a, b| {
+        b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())).then_with(|| a.0.cmp(&b.0))
+    });
     for (name, is_dir, link) in items {
         let path = dir.join(&name);
         let expand = is_dir && open.contains(&path);

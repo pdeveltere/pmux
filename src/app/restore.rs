@@ -37,7 +37,6 @@ struct SavedTab {
     focus: usize,
 }
 
-
 impl App {
     /// The link to the background pmux, attaching (and starting it) if there's none.
     pub(super) fn link(&mut self) -> Result<Link, String> {
@@ -85,8 +84,11 @@ impl App {
         for sv in saved.views {
             let mut v = View::default();
             for st in sv.tabs {
-                let panes: Vec<u32> =
-                    st.panes.into_iter().filter(|id| self.panes.get(id).is_some_and(|p| p.view == sv.path) && placed.insert(*id)).collect();
+                let panes: Vec<u32> = st
+                    .panes
+                    .into_iter()
+                    .filter(|id| self.panes.get(id).is_some_and(|p| p.view == sv.path) && placed.insert(*id))
+                    .collect();
                 if !panes.is_empty() {
                     v.tabs.push(Tab { focus: st.focus.min(panes.len() - 1), panes });
                 }
@@ -129,7 +131,10 @@ impl App {
             (path, v.tab).hash(&mut vh);
             for t in &v.tabs {
                 t.focus.hash(&mut vh);
-                t.panes.iter().filter(|id| self.panes.get(id).is_some_and(Pane::is_term)).for_each(|id| id.hash(&mut vh));
+                t.panes
+                    .iter()
+                    .filter(|id| self.panes.get(id).is_some_and(Pane::is_term))
+                    .for_each(|id| id.hash(&mut vh));
                 usize::MAX.hash(&mut vh); // tab boundary
             }
             acc.wrapping_add(vh.finish())
@@ -176,10 +181,19 @@ impl App {
             .map(|(path, v)| SavedView {
                 path: path.clone(),
                 tab: v.tab,
-                tabs: v.tabs.iter().map(|t| SavedTab { panes: t.panes.iter().copied().filter(term).collect(), focus: t.focus }).collect(),
+                tabs: v
+                    .tabs
+                    .iter()
+                    .map(|t| SavedTab { panes: t.panes.iter().copied().filter(term).collect(), focus: t.focus })
+                    .collect(),
             })
             .collect();
-        let s = serde_json::to_string(&Saved { current: self.current.clone(), views, panels: Some(SavedPanels { sidebar: self.show_sidebar, agents: self.show_agents, files: self.show_files }) }).unwrap();
+        let s = serde_json::to_string(&Saved {
+            current: self.current.clone(),
+            views,
+            panels: Some(SavedPanels { sidebar: self.show_sidebar, agents: self.show_agents, files: self.show_files }),
+        })
+        .unwrap();
         link.layout(&s);
     }
 

@@ -59,7 +59,13 @@ pub enum Ev {
     /// `git status` for an explorer root finished.
     FileStatus(PathBuf, git::Status),
     /// Whether linked worktree `wt` is merged, as of git state `key` (`git::Refs::merge_key`).
-    Merged { proj: PathBuf, wt: PathBuf, branch: String, key: String, how: Option<git::Merge> },
+    Merged {
+        proj: PathBuf,
+        wt: PathBuf,
+        branch: String,
+        key: String,
+        how: Option<git::Merge>,
+    },
     /// `git worktree remove` finished.
     WorktreeRemoved(Removal, Result<(), String>),
     /// `pmux import`: the plan, each folder's repo, and the caller waiting for the result.
@@ -235,7 +241,8 @@ impl App {
             let projects = w.projects.iter().filter_map(|p| Project::open(&config::expand(p))).collect();
             workspaces.push(Workspace::new(path, projects, &workspaces));
         }
-        let flash = config_error.as_ref().map(|e| (format!("config not loaded (changes won't be saved): {e}"), Instant::now()));
+        let flash =
+            config_error.as_ref().map(|e| (format!("config not loaded (changes won't be saved): {e}"), Instant::now()));
         let mut app = App {
             config_error,
             workspaces,
@@ -349,9 +356,13 @@ impl App {
                 self.snapshot = Some((path, rtx));
             }
             // Answered when git finishes, so it doesn't hold up the UI thread.
-            Ev::Api(req, rtx) if req.args.len() > 2 && req.args[0] == "worktree" && req.args[1] == "rm" => self.api_worktree_rm(&req.args, rtx),
+            Ev::Api(req, rtx) if req.args.len() > 2 && req.args[0] == "worktree" && req.args[1] == "rm" => {
+                self.api_worktree_rm(&req.args, rtx)
+            }
             // Answered once git has looked up the folders' repos, off the UI thread.
-            Ev::Api(mut req, rtx) if req.args.len() == 2 && req.args[0] == "import" => self.start_import(req.args.remove(1), rtx),
+            Ev::Api(mut req, rtx) if req.args.len() == 2 && req.args[0] == "import" => {
+                self.start_import(req.args.remove(1), rtx)
+            }
             Ev::Api(req, rtx) => {
                 let r = self.on_api(req);
                 let _ = rtx.send(r);
@@ -425,7 +436,8 @@ impl App {
     /// Watch every project's git metadata, recount every worktree's behind, look for merged ones.
     fn rewatch(&self) {
         self.set_git_watch();
-        let wts: Vec<PathBuf> = self.projects().flat_map(|p| p.worktrees.iter().flatten()).map(|w| w.path.clone()).collect();
+        let wts: Vec<PathBuf> =
+            self.projects().flat_map(|p| p.worktrees.iter().flatten()).map(|w| w.path.clone()).collect();
         self.refresh_refs(wts);
     }
 
@@ -443,7 +455,8 @@ impl App {
     fn reload_git_in(&mut self, changed: Option<&[PathBuf]>) {
         let mut views: Vec<PathBuf> = Vec::new();
         for p in self.workspaces.iter_mut().flat_map(|w| &mut w.projects) {
-            let hit = changed.is_none_or(|c| git::common_dir(&p.path).is_some_and(|d| c.iter().any(|x| x.starts_with(&d))));
+            let hit =
+                changed.is_none_or(|c| git::common_dir(&p.path).is_some_and(|d| c.iter().any(|x| x.starts_with(&d))));
             if hit {
                 p.worktrees = git::worktrees(&p.path);
                 views.push(p.path.clone());
@@ -454,7 +467,8 @@ impl App {
             return;
         }
         self.set_git_watch();
-        let all: HashSet<PathBuf> = self.projects().flat_map(|p| p.worktrees.iter().flatten()).map(|w| w.path.clone()).collect();
+        let all: HashSet<PathBuf> =
+            self.projects().flat_map(|p| p.worktrees.iter().flatten()).map(|w| w.path.clone()).collect();
         self.merged.retain(|k, _| all.contains(k));
         self.merge_keys.retain(|k, _| all.contains(k));
         let wts: Vec<PathBuf> = all.into_iter().filter(|w| views.contains(w)).collect();
@@ -551,7 +565,8 @@ impl App {
 
     /// ⌘E: sidebar ↔ panes (showing the sidebar if it's hidden).
     fn toggle_sidebar_focus(&mut self) {
-        self.focus = if self.focus == Focus::Sidebar && self.focused().is_some() { Focus::Panes } else { Focus::Sidebar };
+        self.focus =
+            if self.focus == Focus::Sidebar && self.focused().is_some() { Focus::Panes } else { Focus::Sidebar };
         if self.focus == Focus::Sidebar {
             self.show_sidebar = true;
         }
@@ -647,6 +662,12 @@ impl App {
         let now = Instant::now();
         let flash = self.flash.as_ref().map(|(_, t)| *t + FLASH_FOR).filter(|f| *f > now);
         let tooltip = self.link_hover.map(|(_, t)| t + TOOLTIP_DELAY).filter(|t| *t > now);
-        self.panes.values().filter_map(Pane::state_change_at).chain(flash).chain(tooltip).chain(self.agents_deadline()).min()
+        self.panes
+            .values()
+            .filter_map(Pane::state_change_at)
+            .chain(flash)
+            .chain(tooltip)
+            .chain(self.agents_deadline())
+            .min()
     }
 }

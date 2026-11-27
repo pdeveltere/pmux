@@ -57,9 +57,7 @@ pub fn encode(k: &KeyEvent, m: M, app_cursor: bool, kitty: bool) -> Vec<u8> {
     };
     match &k.logical_key {
         Key::Named(n) => match n {
-            NamedKey::Enter if kitty && (m.shift_key() || m.control_key()) => {
-                out = csi(&format!("13;{}u", modnum(m)))
-            }
+            NamedKey::Enter if kitty && (m.shift_key() || m.control_key()) => out = csi(&format!("13;{}u", modnum(m))),
             NamedKey::Enter => {
                 if m.alt_key() {
                     out.push(0x1b)

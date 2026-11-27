@@ -35,7 +35,8 @@ pub static BRANCH: Icon = Icon {
 };
 
 /// Symlink marker, Zed's arrow_up_right.svg.
-pub static ARROW_UP_RIGHT: Icon = Icon { view: 16.0, layers: &[stroke("M4.5 11.5L11.5 4.5M4.5 4.5L11.5 4.5L11.5 11.5", 1.2)] };
+pub static ARROW_UP_RIGHT: Icon =
+    Icon { view: 16.0, layers: &[stroke("M4.5 11.5L11.5 4.5M4.5 4.5L11.5 4.5L11.5 11.5", 1.2)] };
 
 /// Status bar panel toggles (lucide panel-left / bot / panel-right, ISC). Rounded rects written as arcs.
 const FRAME: &str = "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2z";
@@ -63,7 +64,15 @@ pub static CLAUDE: Icon = Icon {
 /// OpenCode's mark (LobeHub icons, MIT). Monochrome, so drawn in the text color.
 pub static OPENCODE: Icon = Icon {
     view: 24.0,
-    layers: &[Layer { path: "M16 6H8v12h8V6zm4 16H4V2h16v20z", stroke: 0.0, alpha: 1.0, even_odd: true, cap: 1, join: 1, xf: ID }],
+    layers: &[Layer {
+        path: "M16 6H8v12h8V6zm4 16H4V2h16v20z",
+        stroke: 0.0,
+        alpha: 1.0,
+        even_odd: true,
+        cap: 1,
+        join: 1,
+        xf: ID,
+    }],
 };
 
 /// An agent's icon and color, for agents that have one.
@@ -83,7 +92,10 @@ const FOLDER_SHAPE: &str = "M4.41707 12.4786H6.20854H11.5829C12.5724 12.4786 13.
 /// Filled like the open folder's front: a 0.8 fill under the outline.
 pub static FOLDER: Icon = Icon {
     view: 16.0,
-    layers: &[Layer { path: FOLDER_SHAPE, stroke: 0.0, alpha: 0.8, even_odd: false, cap: 1, join: 1, xf: ID }, stroke(FOLDER_SHAPE, 1.2)],
+    layers: &[
+        Layer { path: FOLDER_SHAPE, stroke: 0.0, alpha: 0.8, even_odd: false, cap: 1, join: 1, xf: ID },
+        stroke(FOLDER_SHAPE, 1.2),
+    ],
 };
 
 pub static FOLDER_OPEN: Icon = Icon {
@@ -95,8 +107,6 @@ pub static FOLDER_OPEN: Icon = Icon {
     ],
 };
 
-
-
 /// Rasterize all layers (round caps/joins) into one `px`×`px` alpha mask.
 pub fn rasterize(icon: &Icon, px: u32) -> Vec<u8> {
     use zeno::{Cap, Fill, Join, Mask, Stroke, Transform};
@@ -106,7 +116,8 @@ pub fn rasterize(icon: &Icon, px: u32) -> Vec<u8> {
         let mut m = Mask::new(l.path);
         if l.stroke > 0.0 {
             let mut st = Stroke::new(l.stroke);
-            st.cap([Cap::Butt, Cap::Round, Cap::Square][l.cap as usize]).join([Join::Miter, Join::Round, Join::Bevel][l.join as usize]);
+            st.cap([Cap::Butt, Cap::Round, Cap::Square][l.cap as usize])
+                .join([Join::Miter, Join::Round, Join::Bevel][l.join as usize]);
             m.style(st);
         } else {
             m.style(if l.even_odd { Fill::EvenOdd } else { Fill::NonZero });
@@ -129,14 +140,25 @@ mod tests {
 
     fn ascii(m: &[u8], px: usize) {
         for y in 0..px {
-            println!("|{}|", (0..px).map(|x| match m[y * px + x] { 0..=40 => ' ', 41..=150 => '+', _ => '#' }).collect::<String>());
+            println!(
+                "|{}|",
+                (0..px)
+                    .map(|x| match m[y * px + x] {
+                        0..=40 => ' ',
+                        41..=150 => '+',
+                        _ => '#',
+                    })
+                    .collect::<String>()
+            );
         }
     }
 
     #[test]
     fn ui_icons_render() {
         let px = 26;
-        for icon in [&BRANCH, &FOLDER, &FOLDER_OPEN, &ARROW_UP_RIGHT, &PANEL_LEFT, &PANEL_RIGHT, &BOT, &CLAUDE, &OPENCODE] {
+        for icon in
+            [&BRANCH, &FOLDER, &FOLDER_OPEN, &ARROW_UP_RIGHT, &PANEL_LEFT, &PANEL_RIGHT, &BOT, &CLAUDE, &OPENCODE]
+        {
             let m = rasterize(icon, px);
             assert_eq!(m.len(), (px * px) as usize);
             ascii(&m, px as usize);
@@ -148,8 +170,19 @@ mod tests {
     fn zed_file_icons() {
         use files::*;
         let is = |name: &str, icon: &'static Icon| std::ptr::eq(for_name(name), icon);
-        assert!(is("main.rs", &RUST) && is("Cargo.toml", &TOML) && is("Dockerfile", &DOCKER) && is("docker-compose.yml", &DOCKER));
-        assert!(is("index.d.ts", &TYPESCRIPT) && is(".gitignore", &GIT) && is("README.md", &BOOK) && is(".env", &FILE) && is("x.json", &CODE));
+        assert!(
+            is("main.rs", &RUST)
+                && is("Cargo.toml", &TOML)
+                && is("Dockerfile", &DOCKER)
+                && is("docker-compose.yml", &DOCKER)
+        );
+        assert!(
+            is("index.d.ts", &TYPESCRIPT)
+                && is(".gitignore", &GIT)
+                && is("README.md", &BOOK)
+                && is(".env", &FILE)
+                && is("x.json", &CODE)
+        );
         for icon in ALL {
             let m = rasterize(icon, 32);
             assert!(m.iter().filter(|a| **a > 128).count() > 20, "icon renders");

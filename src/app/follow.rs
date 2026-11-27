@@ -36,7 +36,8 @@ impl App {
             v.tab = v.tabs.len() - 1;
         }
         let (ws, proj, wt) = self.names(&to);
-        let env = vec![("PMUX_WORKSPACE".into(), ws), ("PMUX_PROJECT".into(), proj), ("PMUX_WORKTREE".into(), wt.clone())];
+        let env =
+            vec![("PMUX_WORKSPACE".into(), ws), ("PMUX_PROJECT".into(), proj), ("PMUX_WORKTREE".into(), wt.clone())];
         if let Some(l) = &self.hold {
             l.moved(id, &Moved { view: to.clone(), env });
         }
@@ -49,4 +50,3 @@ impl App {
         self.dirty = true;
     }
 }
-

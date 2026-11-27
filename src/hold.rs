@@ -353,7 +353,8 @@ pub fn run() -> i32 {
         }
     });
     let atx = tx.clone();
-    if let Err(e) = crate::api::serve_at(&crate::api::hold_sock(), move |req, rtx| atx.send(In::Api(req, rtx)).is_ok()) {
+    if let Err(e) = crate::api::serve_at(&crate::api::hold_sock(), move |req, rtx| atx.send(In::Api(req, rtx)).is_ok())
+    {
         eprintln!("pmux hold: {e}");
     }
     let mut h = Holder { terms: BTreeMap::new(), win: None, layout: String::new(), tx, next_id: 1, due: None };
@@ -440,7 +441,8 @@ impl Holder {
             t.info.worked = false;
         }
         self.send(WELCOME, 0, &serde_json::to_vec(&w).unwrap());
-        let screens: Vec<(u32, Vec<u8>)> = self.terms.iter().map(|(id, t)| (*id, t.vt.dump(t.title.as_deref()))).collect();
+        let screens: Vec<(u32, Vec<u8>)> =
+            self.terms.iter().map(|(id, t)| (*id, t.vt.dump(t.title.as_deref()))).collect();
         for (id, b) in screens {
             self.send(SCREEN, id, &b);
         }
@@ -458,13 +460,15 @@ impl Holder {
 
     fn frame(&mut self, tag: u8, id: u32, p: Vec<u8>) {
         match tag {
-            SPAWN => match serde_json::from_slice::<Spawn>(&p).map_err(|e| e.to_string()).and_then(|s| self.spawn(id, s)) {
-                Ok(()) => self.save(),
-                Err(e) => {
-                    self.send(FAILED, id, e.as_bytes());
-                    self.send(EXIT, id, &[]);
+            SPAWN => {
+                match serde_json::from_slice::<Spawn>(&p).map_err(|e| e.to_string()).and_then(|s| self.spawn(id, s)) {
+                    Ok(()) => self.save(),
+                    Err(e) => {
+                        self.send(FAILED, id, e.as_bytes());
+                        self.send(EXIT, id, &[]);
+                    }
                 }
-            },
+            }
             INPUT => {
                 if let Some(t) = self.terms.get_mut(&id) {
                     t.write(&p);
@@ -543,8 +547,17 @@ impl Holder {
             let _ = child.wait();
             let _ = tx.send(In::Exit(id));
         });
-        let info =
-            TermInfo { id, view: s.view.clone(), rows: s.rows, cols: s.cols, agent: None, meta: Meta::default(), worked: false, screen: None, cwd: None };
+        let info = TermInfo {
+            id,
+            view: s.view.clone(),
+            rows: s.rows,
+            cols: s.cols,
+            agent: None,
+            meta: Meta::default(),
+            worked: false,
+            screen: None,
+            cwd: None,
+        };
         let long_ago = Instant::now() - Duration::from_secs(60);
         let vt = Vt::new(s.cols as usize, s.rows as usize);
         let t = Term {
@@ -586,7 +599,8 @@ impl Holder {
                     t.write(f(rgb).as_bytes());
                 }
                 TEvent::TextAreaSizeRequest(f) if !attached => {
-                    let ws = WindowSize { num_lines: t.info.rows, num_cols: t.info.cols, cell_width: 0, cell_height: 0 };
+                    let ws =
+                        WindowSize { num_lines: t.info.rows, num_cols: t.info.cols, cell_width: 0, cell_height: 0 };
                     t.write(f(ws).as_bytes());
                 }
                 _ => {}
@@ -729,7 +743,15 @@ impl Term {
     }
     fn line(&self, me: Option<u32>) -> String {
         let here = if Some(self.info.id) == me { "  ◀ here" } else { "" };
-        format!("%{:<3} {:<8} {:<8} {:<36} {}{}", self.info.id, self.kind(), self.state(), self.place(), self.label(), here)
+        format!(
+            "%{:<3} {:<8} {:<8} {:<36} {}{}",
+            self.info.id,
+            self.kind(),
+            self.state(),
+            self.place(),
+            self.label(),
+            here
+        )
     }
 }
 
@@ -769,7 +791,9 @@ impl Holder {
                 Reply::ok("")
             }
             ["status", st, rest @ ..] => {
-                let Some(id) = rest.first().and_then(|r| self.resolve(r, caller)).or(me) else { return Reply::err("no target pane") };
+                let Some(id) = rest.first().and_then(|r| self.resolve(r, caller)).or(me) else {
+                    return Reply::err("no target pane");
+                };
                 let state = match *st {
                     "clear" => None,
                     "working" | "waiting" | "idle" | "done" | "error" => Some(st.to_string()),
@@ -835,7 +859,9 @@ impl Holder {
     /// in a new tab.
     fn api_new(&mut self, me: Option<u32>, cmd: &[&str]) -> crate::api::Reply {
         use crate::api::Reply;
-        let Some(t) = me.and_then(|id| self.terms.get(&id)) else { return Reply::err("`pmux new` from outside a pane needs the pmux window open") };
+        let Some(t) = me.and_then(|id| self.terms.get(&id)) else {
+            return Reply::err("`pmux new` from outside a pane needs the pmux window open");
+        };
         let id = self.next_id;
         let mut s = t.spawn.clone();
         s.rows = t.info.rows;
@@ -931,7 +957,14 @@ impl Holder {
                 }
                 spawn.rows = t.info.rows;
                 spawn.cols = t.info.cols;
-                SavedTerm { id: t.info.id, spawn, meta: t.info.meta.clone(), agent: t.info.agent.clone(), argv: t.argv.clone(), session: t.session.clone() }
+                SavedTerm {
+                    id: t.info.id,
+                    spawn,
+                    meta: t.info.meta.clone(),
+                    agent: t.info.agent.clone(),
+                    argv: t.argv.clone(),
+                    session: t.session.clone(),
+                }
             })
             .collect();
         let s = Saved { next_id: self.next_id, layout: self.layout.clone(), terms };

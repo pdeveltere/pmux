@@ -64,7 +64,11 @@ impl App {
             .filter(|p| p.is_term())
             .map(|p| {
                 let r = crate::hold::reopen_info(p.id);
-                Closed { view: p.view.clone(), cwd: r.as_ref().map_or_else(|| p.view.clone(), |r| r.cwd.clone()), cmd: r.and_then(|r| r.cmd) }
+                Closed {
+                    view: p.view.clone(),
+                    cwd: r.as_ref().map_or_else(|| p.view.clone(), |r| r.cwd.clone()),
+                    cmd: r.and_then(|r| r.cmd),
+                }
             })
             .collect();
         if !group.is_empty() {
@@ -112,7 +116,9 @@ impl App {
 
     /// Jump to the lowest-numbered pane waiting for the user.
     pub(super) fn next_attention(&mut self) {
-        let Some(id) = self.panes.values().filter(|p| p.state() == Some(State::Waiting)).map(|p| p.id).min() else { return };
+        let Some(id) = self.panes.values().filter(|p| p.state() == Some(State::Waiting)).map(|p| p.id).min() else {
+            return;
+        };
         self.show_pane(id);
     }
 

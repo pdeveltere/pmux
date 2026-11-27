@@ -39,7 +39,12 @@ enum Toggle {
 impl App {
     pub fn search_geom(&self, body: R) -> SearchGeom {
         let bar = R { h: self.px(super::edit::SEARCH_BAR_H).min(body.h), ..body };
-        let field = R { x: bar.x + self.px(8.0), y: bar.y + self.px(6.0), w: self.px(360.0).min(bar.w * 0.6), h: bar.h - self.px(12.0) };
+        let field = R {
+            x: bar.x + self.px(8.0),
+            y: bar.y + self.px(6.0),
+            w: self.px(360.0).min(bar.w * 0.6),
+            h: bar.h - self.px(12.0),
+        };
         let tw = self.px(28.0);
         let t = |k: f32| R { x: field.x + field.w + self.px(6.0) + k * (tw + self.px(2.0)), w: tw, ..field };
         let list = R { y: bar.y + bar.h + self.px(4.0), h: (body.h - bar.h - self.px(4.0)).max(0.0), ..body };
@@ -224,7 +229,11 @@ impl App {
         let (path, line, (a, b)) = (s.root.join(&f.path), h.line, h.ranges[0]);
         self.open_file(&path);
         let Some(eid) = self.focused().filter(|e| *e != id) else { return };
-        let rows = self.layout().into_iter().find(|p| p.id == eid).and_then(|pr| Some(self.editor_geom(pr.body, self.panes.get(&eid)?.editor.as_ref()?).rows));
+        let rows = self
+            .layout()
+            .into_iter()
+            .find(|p| p.id == eid)
+            .and_then(|pr| Some(self.editor_geom(pr.body, self.panes.get(&eid)?.editor.as_ref()?).rows));
         let Some(ed) = self.panes.get_mut(&eid).and_then(|p| p.editor.as_mut()) else { return };
         ed.set_cursor(Pos::new(line, a), false);
         ed.set_cursor(Pos::new(line, b), true);

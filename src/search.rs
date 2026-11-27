@@ -25,7 +25,11 @@ impl Query {
     pub fn build(&self) -> Result<Regex, String> {
         let pat = if self.regex { self.text.clone() } else { regex::escape(&self.text) };
         let pat = if self.word { format!(r"\b(?:{pat})\b") } else { pat };
-        RegexBuilder::new(&pat).case_insensitive(!self.case).multi_line(true).build().map_err(|e| e.to_string().lines().last().unwrap_or("bad pattern").trim().to_string())
+        RegexBuilder::new(&pat)
+            .case_insensitive(!self.case)
+            .multi_line(true)
+            .build()
+            .map_err(|e| e.to_string().lines().last().unwrap_or("bad pattern").trim().to_string())
     }
 }
 
@@ -223,7 +227,8 @@ impl ProjectSearch {
     /// Scroll so the selection shows (with its file header when that's just above).
     pub fn show_sel(&mut self, vis: usize) {
         let vis = vis.max(1);
-        let want = if self.sel > 0 && matches!(self.rows[self.sel - 1], Row::File(_)) { self.sel - 1 } else { self.sel };
+        let want =
+            if self.sel > 0 && matches!(self.rows[self.sel - 1], Row::File(_)) { self.sel - 1 } else { self.sel };
         if want < self.top {
             self.top = want;
         } else if self.sel >= self.top + vis {

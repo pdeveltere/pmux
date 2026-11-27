@@ -67,7 +67,11 @@ pub fn common_dir(dir: &Path) -> Option<PathBuf> {
     let common = match read(&gd.join("commondir")) {
         Some(c) => {
             let c = PathBuf::from(c);
-            if c.is_absolute() { c } else { gd.join(c) }
+            if c.is_absolute() {
+                c
+            } else {
+                gd.join(c)
+            }
         }
         None => gd,
     };
@@ -166,7 +170,12 @@ pub fn remove(project: &Path, wt: &Path, force: bool) -> Result<(), String> {
 /// uncommitted: leave it all, git refuses then and the worktree stays.
 pub fn drop_untracked_links(wt: &Path) {
     let Ok(out) = read_only(wt, &["status", "--porcelain=v1", "-z", "-unormal"]) else { return };
-    let paths: Vec<PathBuf> = out.split('\0').filter(|r| !r.is_empty()).map(|r| r.strip_prefix("?? ").map(|p| wt.join(p.trim_end_matches('/')))).collect::<Option<_>>().unwrap_or_default();
+    let paths: Vec<PathBuf> = out
+        .split('\0')
+        .filter(|r| !r.is_empty())
+        .map(|r| r.strip_prefix("?? ").map(|p| wt.join(p.trim_end_matches('/'))))
+        .collect::<Option<_>>()
+        .unwrap_or_default();
     if paths.iter().all(|p| fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink())) {
         for p in paths {
             let _ = fs::remove_file(p);
@@ -228,7 +237,8 @@ impl Refs {
         for l in out.lines() {
             let mut f = l.split('\0');
             let (Some(name), Some(commit)) = (f.next(), f.next()) else { continue };
-            let behind: u32 = f.next().unwrap_or("").split(", ").find_map(|t| t.strip_prefix("behind ")?.parse().ok()).unwrap_or(0);
+            let behind: u32 =
+                f.next().unwrap_or("").split(", ").find_map(|t| t.strip_prefix("behind ")?.parse().ok()).unwrap_or(0);
             if let Some(b) = name.strip_prefix("refs/heads/").filter(|_| behind > 0) {
                 r.behind.insert(b.to_string(), behind);
             }
@@ -273,7 +283,14 @@ impl Refs {
 fn patch_ids(dir: &Path, diff: &str) -> Vec<String> {
     use std::io::Write;
     use std::process::Stdio;
-    let Ok(mut c) = Command::new("git").arg("-C").arg(dir).args(["patch-id", "--stable"]).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn() else {
+    let Ok(mut c) = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["patch-id", "--stable"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+    else {
         return vec![];
     };
     let mut stdin = c.stdin.take().expect("piped");
@@ -321,7 +338,12 @@ pub fn merged(project: &Path, wt: &Path, branch: &str) -> Option<Merge> {
         let Ok(diff) = read_only(project, &["diff", "--no-color", "--no-ext-diff", mb, &tip]) else { continue };
         let Some(want) = patch_ids(project, &diff).into_iter().next() else { continue };
         let range = format!("{mb}..{r}");
-        let Ok(log) = read_only(project, &["log", "-p", "--no-merges", "--no-color", "--no-ext-diff", "-n", SQUASH_SEARCH, &range]) else { continue };
+        let Ok(log) = read_only(
+            project,
+            &["log", "-p", "--no-merges", "--no-color", "--no-ext-diff", "-n", SQUASH_SEARCH, &range],
+        ) else {
+            continue;
+        };
         if patch_ids(project, &log).contains(&want) {
             return Some(Merge::Squash);
         }
@@ -329,7 +351,11 @@ pub fn merged(project: &Path, wt: &Path, branch: &str) -> Option<Merge> {
     // A squash that git can't match (main changed the same lines meanwhile): ask GitHub, for
     // a branch that was pushed. Only a PR merged at exactly our tip counts: no lost commits.
     read_only(project, &["rev-parse", "--verify", "--quiet", &format!("{branch}@{{upstream}}")]).ok()?;
-    let o = Command::new(gh()?).current_dir(wt).args(["pr", "list", "--head", branch, "--state", "merged", "--json", "headRefOid", "--jq", ".[].headRefOid"]).output().ok()?;
+    let o = Command::new(gh()?)
+        .current_dir(wt)
+        .args(["pr", "list", "--head", branch, "--state", "merged", "--json", "headRefOid", "--jq", ".[].headRefOid"])
+        .output()
+        .ok()?;
     (o.status.success() && String::from_utf8_lossy(&o.stdout).lines().any(|l| l.trim() == tip)).then_some(Merge::Pr)
 }
 
@@ -350,7 +376,11 @@ pub fn status(root: &Path) -> Status {
     let Ok(top) = run(root, &["rev-parse", "--show-toplevel"]) else { return st };
     let top = PathBuf::from(top.trim());
     let top = fs::canonicalize(&top).unwrap_or(top);
-    let Ok(out) = run(root, &["--no-optional-locks", "status", "--porcelain=v1", "-z", "--ignored", "-unormal", "--", "."]) else { return st };
+    let Ok(out) =
+        run(root, &["--no-optional-locks", "status", "--porcelain=v1", "-z", "--ignored", "-unormal", "--", "."])
+    else {
+        return st;
+    };
     let mut recs = out.split('\0');
     while let Some(r) = recs.next() {
         // "XY path"; a rename/copy is followed by its source path as a record of its own (which

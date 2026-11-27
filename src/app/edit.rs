@@ -50,7 +50,8 @@ impl App {
 
     /// Show `p` in an editor tab of `view`, reusing the tab that already has it.
     pub(super) fn open_file_in(&mut self, view: &Path, p: &Path) -> Result<u32, String> {
-        let existing = self.panes_in(view).into_iter().find(|id| self.panes[id].editor.as_ref().is_some_and(|e| e.path == p));
+        let existing =
+            self.panes_in(view).into_iter().find(|id| self.panes[id].editor.as_ref().is_some_and(|e| e.path == p));
         let id = match existing {
             Some(id) => id,
             None => self.spawn_editor(view, p)?,
@@ -66,7 +67,8 @@ impl App {
 
     /// Watch the files open in editors (after one opens or closes).
     pub(super) fn editors_rewatch(&self) {
-        let mut paths: Vec<std::path::PathBuf> = self.panes.values().filter_map(|p| Some(p.editor.as_ref()?.path.clone())).collect();
+        let mut paths: Vec<std::path::PathBuf> =
+            self.panes.values().filter_map(|p| Some(p.editor.as_ref()?.path.clone())).collect();
         paths.sort();
         paths.dedup();
         self.disk_watcher.set(paths);
@@ -78,7 +80,9 @@ impl App {
         let mut reloaded = Vec::new();
         let mut conflicts = Vec::new();
         for p in self.panes.values_mut() {
-            let Some(e) = p.editor.as_mut().filter(|e| changed.contains(&e.path) && e.changed_on_disk()) else { continue };
+            let Some(e) = p.editor.as_mut().filter(|e| changed.contains(&e.path) && e.changed_on_disk()) else {
+                continue;
+            };
             if e.modified() {
                 conflicts.push(e.name());
             } else if e.reload().is_ok() {
@@ -235,8 +239,20 @@ impl App {
                 });
             }
             (Some(NamedKey::Backspace), _, _) if finding => e.set_query(String::new()),
-            (_, _, Some('c')) if finding => platform::clipboard_set(&e.search.as_ref().map(|s| s.query.clone()).unwrap_or_default()),
-            (Some(NamedKey::ArrowLeft | NamedKey::ArrowRight | NamedKey::ArrowUp | NamedKey::ArrowDown | NamedKey::Delete), _, _)
+            (_, _, Some('c')) if finding => {
+                platform::clipboard_set(&e.search.as_ref().map(|s| s.query.clone()).unwrap_or_default())
+            }
+            (
+                Some(
+                    NamedKey::ArrowLeft
+                    | NamedKey::ArrowRight
+                    | NamedKey::ArrowUp
+                    | NamedKey::ArrowDown
+                    | NamedKey::Delete,
+                ),
+                _,
+                _,
+            )
             | (_, _, Some('z' | 'y' | 'a' | 'x' | ']' | '['))
                 if finding => {}
             (Some(NamedKey::ArrowLeft), _, _) => e.move_to(Move::Home, shift),

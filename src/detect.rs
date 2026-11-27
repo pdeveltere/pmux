@@ -142,7 +142,13 @@ pub fn parse(src: &str) -> Result<Manifest, String> {
             s => Some(Screen::parse(s).ok_or(format!("{}: unknown state {s}", r.id))?),
         };
         let region = region(&r.region).map_err(|e| format!("{}: {e}", r.id))?;
-        rules.push(Rule { state, priority: r.priority, region, cond: compile(r.cond).map_err(|e| format!("{}: {e}", r.id))?, id: r.id });
+        rules.push(Rule {
+            state,
+            priority: r.priority,
+            region,
+            cond: compile(r.cond).map_err(|e| format!("{}: {e}", r.id))?,
+            id: r.id,
+        });
     }
     rules.sort_by_key(|r| -r.priority);
     Ok(Manifest { agent: m.id, rules })
@@ -151,7 +157,9 @@ pub fn parse(src: &str) -> Result<Manifest, String> {
 /// The built-in manifests, compiled once.
 fn manifests() -> &'static [Manifest] {
     static M: OnceLock<Vec<Manifest>> = OnceLock::new();
-    M.get_or_init(|| MANIFESTS.iter().filter_map(|s| parse(s).map_err(|e| eprintln!("pmux: agent manifest: {e}")).ok()).collect())
+    M.get_or_init(|| {
+        MANIFESTS.iter().filter_map(|s| parse(s).map_err(|e| eprintln!("pmux: agent manifest: {e}")).ok()).collect()
+    })
 }
 
 /// The manifest for an agent (as named by `pty::agent_of`), if there is one.
@@ -224,7 +232,10 @@ impl Manifest {
 pub fn cli(args: &[String]) -> i32 {
     use std::io::Read;
     let Some(m) = args.first().and_then(|a| manifest(a)) else {
-        eprintln!("usage: pmux detect <agent> [title] < screen.txt   (agents: {})", manifests().iter().map(|m| m.agent.as_str()).collect::<Vec<_>>().join(", "));
+        eprintln!(
+            "usage: pmux detect <agent> [title] < screen.txt   (agents: {})",
+            manifests().iter().map(|m| m.agent.as_str()).collect::<Vec<_>>().join(", ")
+        );
         return 1;
     };
     let mut s = String::new();
@@ -260,7 +271,9 @@ mod tests {
         let idle = screen(&format!("⏺ Done.\n\n{rule}\n❯ \n{rule}\n  ? for shortcuts"));
         assert_eq!(m.detect(&idle, "✳ Fix bug").map(|x| x.0), Some(Screen::Idle));
 
-        let working = screen(&format!("✻ Pondering… (12s · ↓ 1.2k tokens · esc to interrupt)\n\n{rule}\n❯ \n{rule}\n  ⏵⏵ accept edits on"));
+        let working = screen(&format!(
+            "✻ Pondering… (12s · ↓ 1.2k tokens · esc to interrupt)\n\n{rule}\n❯ \n{rule}\n  ⏵⏵ accept edits on"
+        ));
         assert_eq!(m.detect(&working, "✳ Fix bug").map(|x| x.0), Some(Screen::Working));
         assert_eq!(m.detect(&idle, "⠂ Fix bug").map(|x| x.0), Some(Screen::Working));
 

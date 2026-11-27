@@ -184,9 +184,12 @@ impl Vt {
             let wrapped = row[Column(cols - 1)].flags.contains(Flags::WRAPLINE);
             // Trailing blank cells add nothing (unless the line wraps: then they're part of it).
             let plain = |c: &alacritty_terminal::term::cell::Cell| {
-                c.c == ' ' && c.bg == Color::Named(NamedColor::Background) && c.flags.difference(Flags::WRAPLINE).is_empty()
+                c.c == ' '
+                    && c.bg == Color::Named(NamedColor::Background)
+                    && c.flags.difference(Flags::WRAPLINE).is_empty()
             };
-            let end = if wrapped { cols } else { (0..cols).rev().find(|&c| !plain(&row[Column(c)])).map_or(0, |c| c + 1) };
+            let end =
+                if wrapped { cols } else { (0..cols).rev().find(|&c| !plain(&row[Column(c)])).map_or(0, |c| c + 1) };
             for c in 0..end {
                 let cell = &row[Column(c)];
                 if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
@@ -284,7 +287,9 @@ mod tests {
         use alacritty_terminal::event::Event;
         use alacritty_terminal::term::TermMode;
         let mut a = Vt::new(20, 4);
-        let replies = |ev: Vec<Event>| ev.into_iter().filter_map(|e| if let Event::PtyWrite(s) = e { Some(s) } else { None }).collect::<Vec<_>>();
+        let replies = |ev: Vec<Event>| {
+            ev.into_iter().filter_map(|e| if let Event::PtyWrite(s) = e { Some(s) } else { None }).collect::<Vec<_>>()
+        };
         assert_eq!(replies(a.feed(b"\x1b[?u")), ["\x1b[?0u"]);
         a.feed(b"\x1b[>1u");
         assert!(a.mode().contains(TermMode::DISAMBIGUATE_ESC_CODES));

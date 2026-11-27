@@ -1,5 +1,8 @@
 //! Build one frame's draw list: sidebar, tabs, terminal grids, file explorer, status bar, menu.
-use crate::app::{ago, is_default_branch, proj_key, subtree_end, ws_key, Action, AgentRow, App, Focus, Group, Pane, Panel, PromptKind, Row, State, TabHit, Tree, TreeRow, R};
+use crate::app::{
+    ago, is_default_branch, proj_key, subtree_end, ws_key, Action, AgentRow, App, Focus, Group, Pane, Panel,
+    PromptKind, Row, State, TabHit, Tree, TreeRow, R,
+};
 use crate::git::FileState;
 use crate::gpu::{Inst, COLOR, MASK, RECT};
 use crate::icons::{self, Icon};
@@ -121,7 +124,6 @@ fn git_color(g: FileState) -> C {
         FileState::Ignored => FAINT,
     }
 }
-
 
 /// A glyph to draw in a cell grid: char, style, x, baseline y, color.
 type CellGlyph = (char, u8, f32, f32, C);
@@ -381,7 +383,11 @@ fn sidebar(app: &App, p: &mut Painter) {
                 let ws = &app.workspaces[wi];
                 let folded = app.folded.contains(&ws_key(&ws.name));
                 // Its own folder's panes; folded, its projects' roll up into it too.
-                let panes = if folded { app.panes.values().filter(|pn| app.names(&pn.view).0 == ws.name).map(|pn| pn.id).collect() } else { app.panes_in(&ws.path) };
+                let panes = if folded {
+                    app.panes.values().filter(|pn| app.names(&pn.view).0 == ws.name).map(|pn| pn.id).collect()
+                } else {
+                    app.panes_in(&ws.path)
+                };
                 let open = !folded && !ws.projects.is_empty();
                 (ws.name.clone(), folder(open), TEXT, true, panes)
             }
@@ -417,7 +423,14 @@ fn sidebar(app: &App, p: &mut Painter) {
                 p.rect(t.bg.inset(app.hairline()), SIDEBAR);
                 let cx = (t.text_x + p.measure(&pr.input, 13.0, false) + app.px(1.0)).min(t.right - app.px(2.0));
                 p.rect(R { x: cx, y: t.bg.y + app.px(4.0), w: app.px(1.5), h: t.bg.h - app.px(8.0) }, TEXT);
-                return RowLook { icon, icon_color: MUTED, label: pr.input.clone(), label_color: TEXT, bold: false, label_end: t.right - app.px(4.0) };
+                return RowLook {
+                    icon,
+                    icon_color: MUTED,
+                    label: pr.input.clone(),
+                    label_color: TEXT,
+                    bold: false,
+                    label_end: t.right - app.px(4.0),
+                };
             }
         };
         let r = t.bg;
@@ -441,7 +454,14 @@ fn sidebar(app: &App, p: &mut Painter) {
         } else if behind_of.is_some_and(|v| app.merged.contains_key(v)) {
             label_end = p.text_right("merged", label_end, r, 11.5, MUTED, false) - app.px(6.0);
         }
-        RowLook { icon, icon_color: if current { ACCENT } else { MUTED }, label, label_color: if current { ACCENT } else { fg }, bold: bold || current, label_end }
+        RowLook {
+            icon,
+            icon_color: if current { ACCENT } else { MUTED },
+            label,
+            label_color: if current { ACCENT } else { fg },
+            bold: bold || current,
+            label_end,
+        }
     });
 
     // Reorder drag: the dragged row stays highlighted; a line marks where it lands.
@@ -466,7 +486,8 @@ fn agent_title(pn: &Pane) -> Option<String> {
         return Some(t.clone());
     }
     let t = pn.osc_title.as_deref()?.trim_start_matches(|c: char| !c.is_alphanumeric()).trim();
-    let telling = !t.is_empty() && !t.starts_with(['~', '/']) && !t.contains('@') && Some(t.to_lowercase().as_str()) != pn.agent;
+    let telling =
+        !t.is_empty() && !t.starts_with(['~', '/']) && !t.contains('@') && Some(t.to_lowercase().as_str()) != pn.agent;
     telling.then(|| t.to_string())
 }
 
@@ -500,7 +521,13 @@ fn agents(app: &App, p: &mut Painter) {
                 let w = p.text(g.label(), R { x: left, w: t.right - left, ..r }, 11.5, group_color(g), true);
                 let folded = app.agent_group_folded(g);
                 let c = if hover { TEXT } else { FAINT };
-                p.text(&if folded { format!("{n} hidden") } else { n.to_string() }, R { x: left + w + app.px(6.0), w: app.px(80.0), ..r }, 11.5, c, false);
+                p.text(
+                    &if folded { format!("{n} hidden") } else { n.to_string() },
+                    R { x: left + w + app.px(6.0), w: app.px(80.0), ..r },
+                    11.5,
+                    c,
+                    false,
+                );
             }
             AgentRow::Agent(id) => {
                 let Some(pn) = app.panes.get(&id) else { continue };
@@ -523,7 +550,13 @@ fn agents(app: &App, p: &mut Painter) {
                 let place = if is_default_branch(&wt) || wt == proj { proj } else { wt };
                 let dim = g == Group::Idle && !is_focus;
                 let left = left + agent_icon(app, p, pn, left, r);
-                let w = p.text(&place, R { x: left, w: (end - left).max(0.0), ..r }, 13.0, if dim { MUTED } else { TEXT }, false);
+                let w = p.text(
+                    &place,
+                    R { x: left, w: (end - left).max(0.0), ..r },
+                    13.0,
+                    if dim { MUTED } else { TEXT },
+                    false,
+                );
                 let rest = agent_title(pn).unwrap_or_else(|| pn.kind().to_string());
                 let x = left + w + app.px(5.0);
                 if end > x {
@@ -562,26 +595,34 @@ fn files(app: &App, p: &mut Painter) {
     let focused = app.focus == Focus::Files;
     let bg = |i: usize| row_bg(i == e.sel && focused, i == e.sel, app.files_hover == Some(i));
     let active_parent = e.parent(e.sel);
-    draw_tree(app, p, app.files_tree(), &levels, bg, |start| active_parent == Some(start), |p, i, t| {
-        let en = &e.entries[i];
-        let git = e.git(&en.path);
-        let label_color = git.map_or(TEXT, git_color);
-        // Symlinks: Zed's arrow at indicator size on the right, in the label's color.
-        let mut label_end = t.right;
-        if en.link.is_some() {
-            let r = app.files_link_icon(t);
-            p.icon_pt(&icons::ARROW_UP_RIGHT, r, label_color, crate::app::LINK_PT);
-            label_end = r.x - app.px(4.0);
-        }
-        RowLook {
-            icon: if en.dir { folder(e.open.contains(&en.path)) } else { icons::files::for_name(&en.name) },
-            icon_color: if git == Some(FileState::Ignored) { FAINT } else { MUTED },
-            label: en.name.clone(),
-            label_color,
-            bold: en.depth == 0,
-            label_end,
-        }
-    });
+    draw_tree(
+        app,
+        p,
+        app.files_tree(),
+        &levels,
+        bg,
+        |start| active_parent == Some(start),
+        |p, i, t| {
+            let en = &e.entries[i];
+            let git = e.git(&en.path);
+            let label_color = git.map_or(TEXT, git_color);
+            // Symlinks: Zed's arrow at indicator size on the right, in the label's color.
+            let mut label_end = t.right;
+            if en.link.is_some() {
+                let r = app.files_link_icon(t);
+                p.icon_pt(&icons::ARROW_UP_RIGHT, r, label_color, crate::app::LINK_PT);
+                label_end = r.x - app.px(4.0);
+            }
+            RowLook {
+                icon: if en.dir { folder(e.open.contains(&en.path)) } else { icons::files::for_name(&en.name) },
+                icon_color: if git == Some(FileState::Ignored) { FAINT } else { MUTED },
+                label: en.name.clone(),
+                label_color,
+                bold: en.depth == 0,
+                label_end,
+            }
+        },
+    );
 }
 
 /// Shell titles are usually `user@host:~/dir`: the dir is the useful part.
@@ -653,7 +694,8 @@ fn panes(app: &App, p: &mut Painter) {
     let area = app.pane_area();
     let layout = app.layout();
     if layout.is_empty() {
-        let msg = if app.current.is_some() { "No panes. Press ⌘D to open one." } else { "Pick a worktree in the sidebar." };
+        let msg =
+            if app.current.is_some() { "No panes. Press ⌘D to open one." } else { "Pick a worktree in the sidebar." };
         p.text_centered(msg, R { y: area.y + area.h / 2.0 - app.px(10.0), h: app.px(20.0), ..area }, 13.0, MUTED);
         return;
     }
@@ -792,12 +834,19 @@ fn syntax_style(k: u8) -> (C, u8) {
         "keyword" => rgb(0xb4, 0x77, 0xcf),
         "string" | "text.literal" | "markup.raw" => rgb(0xa1, 0xc1, 0x81),
         "string.escape" => rgb(0x87, 0x8e, 0x98),
-        "string.special" | "number" | "boolean" | "constant" | "constant.builtin" | "variable.builtin" => rgb(0xbf, 0x95, 0x6a),
+        "string.special" | "number" | "boolean" | "constant" | "constant.builtin" | "variable.builtin" => {
+            rgb(0xbf, 0x95, 0x6a)
+        }
         "comment" | "comment.doc" => rgb(0x5d, 0x63, 0x6f),
-        "function" | "function.builtin" | "function.macro" | "function.method" | "constructor" | "attribute" | "tag" | "label" => rgb(0x73, 0xad, 0xe9),
-        "type" | "type.builtin" | "operator" | "module" | "text.uri" | "markup.link" | "text.reference" => rgb(0x6e, 0xb4, 0xbf),
+        "function" | "function.builtin" | "function.macro" | "function.method" | "constructor" | "attribute"
+        | "tag" | "label" => rgb(0x73, 0xad, 0xe9),
+        "type" | "type.builtin" | "operator" | "module" | "text.uri" | "markup.link" | "text.reference" => {
+            rgb(0x6e, 0xb4, 0xbf)
+        }
         "property" | "text.title" | "markup.heading" => rgb(0xd0, 0x72, 0x77),
-        "punctuation" | "punctuation.bracket" | "punctuation.delimiter" | "punctuation.special" => rgb(0xb2, 0xb9, 0xc6),
+        "punctuation" | "punctuation.bracket" | "punctuation.delimiter" | "punctuation.special" => {
+            rgb(0xb2, 0xb9, 0xc6)
+        }
         "escape" => rgb(0x87, 0x8e, 0x98),
         _ => TEXT,
     };
@@ -897,16 +946,39 @@ fn search_bar(app: &App, p: &mut Painter, ed: &crate::editor::Editor, s: &crate:
     p.rect(bar, SIDEBAR);
     p.rect(R { y: bar.y + bar.h - line, h: line, ..bar }, BORDER);
     let pad = app.px(8.0);
-    let field = R { x: bar.x + pad, y: bar.y + app.px(6.0), w: app.px(320.0).min(bar.w * 0.6), h: bar.h - app.px(12.0) };
+    let field =
+        R { x: bar.x + pad, y: bar.y + app.px(6.0), w: app.px(320.0).min(bar.w * 0.6), h: bar.h - app.px(12.0) };
     let active = focus && s.focused;
     let none = !s.query.is_empty() && s.matches.is_empty();
     p.rect(field, BG);
-    p.outline(field, line, if none { DANGER } else if active { ACCENT } else { BORDER });
+    p.outline(
+        field,
+        line,
+        if none {
+            DANGER
+        } else if active {
+            ACCENT
+        } else {
+            BORDER
+        },
+    );
     let tx = field.x + app.px(8.0);
     let tr = R { x: tx, w: field.w - app.px(16.0), ..field };
-    let w = if s.query.is_empty() { p.text("Search…", tr, 13.0, FAINT, false).min(0.0) } else { p.text(&s.query, tr, 13.0, TEXT, false) };
+    let w = if s.query.is_empty() {
+        p.text("Search…", tr, 13.0, FAINT, false).min(0.0)
+    } else {
+        p.text(&s.query, tr, 13.0, TEXT, false)
+    };
     if active {
-        p.rect(R { x: (tx + w).min(field.x + field.w - app.px(6.0)), y: field.y + app.px(5.0), w: app.px(1.5), h: field.h - app.px(10.0) }, TEXT);
+        p.rect(
+            R {
+                x: (tx + w).min(field.x + field.w - app.px(6.0)),
+                y: field.y + app.px(5.0),
+                w: app.px(1.5),
+                h: field.h - app.px(10.0),
+            },
+            TEXT,
+        );
     }
     // Match case: highlighted when on (⌥⌘C).
     let aa = R { x: field.x + field.w + app.px(6.0), w: app.px(26.0), ..field };
@@ -919,7 +991,13 @@ fn search_bar(app: &App, p: &mut Painter, ed: &crate::editor::Editor, s: &crate:
         (false, 0) => "No results".into(),
         (false, n) => format!("{}/{n}", ed.match_index().map_or("?".into(), |i| i.to_string())),
     };
-    p.text(&count, R { x: aa.x + aa.w + app.px(10.0), w: (bar.x + bar.w - aa.x - aa.w - app.px(18.0)).max(0.0), ..field }, 12.0, MUTED, false);
+    p.text(
+        &count,
+        R { x: aa.x + aa.w + app.px(10.0), w: (bar.x + bar.w - aa.x - aa.w - app.px(18.0)).max(0.0), ..field },
+        12.0,
+        MUTED,
+        false,
+    );
 }
 
 /// A project search tab (⌘⇧F): query bar with Zed's toggles, then each file's matching lines.
@@ -932,12 +1010,34 @@ fn project_search(app: &App, p: &mut Painter, s: &crate::search::ProjectSearch, 
     p.rect(R { y: bar.y + bar.h - line, h: line, ..bar }, BORDER);
     let field = g.field;
     p.rect(field, BG);
-    p.outline(field, line, if s.error.is_some() { DANGER } else if focus { ACCENT } else { BORDER });
+    p.outline(
+        field,
+        line,
+        if s.error.is_some() {
+            DANGER
+        } else if focus {
+            ACCENT
+        } else {
+            BORDER
+        },
+    );
     let tx = field.x + app.px(8.0);
     let tr = R { x: tx, w: field.w - app.px(16.0), ..field };
-    let w = if s.query.text.is_empty() { p.text("Search all files…", tr, 13.0, FAINT, false).min(0.0) } else { p.text(&s.query.text, tr, 13.0, TEXT, false) };
+    let w = if s.query.text.is_empty() {
+        p.text("Search all files…", tr, 13.0, FAINT, false).min(0.0)
+    } else {
+        p.text(&s.query.text, tr, 13.0, TEXT, false)
+    };
     if focus {
-        p.rect(R { x: (tx + w).min(field.x + field.w - app.px(6.0)), y: field.y + app.px(5.0), w: app.px(1.5), h: field.h - app.px(10.0) }, TEXT);
+        p.rect(
+            R {
+                x: (tx + w).min(field.x + field.w - app.px(6.0)),
+                y: field.y + app.px(5.0),
+                w: app.px(1.5),
+                h: field.h - app.px(10.0),
+            },
+            TEXT,
+        );
     }
     for (t, (label, on)) in g.toggles.iter().zip([("Aa", s.query.case), ("ab", s.query.word), (".*", s.query.regex)]) {
         if on {
@@ -946,7 +1046,10 @@ fn project_search(app: &App, p: &mut Painter, s: &crate::search::ProjectSearch, 
         p.text_centered(label, *t, 12.0, if on { TEXT } else { MUTED });
         if label == "ab" {
             // Whole word: a bar under the letters.
-            p.rect(R { x: t.x + app.px(8.0), y: t.y + t.h - app.px(6.0), w: t.w - app.px(16.0), h: line.max(1.0) }, if on { TEXT } else { MUTED });
+            p.rect(
+                R { x: t.x + app.px(8.0), y: t.y + t.h - app.px(6.0), w: t.w - app.px(16.0), h: line.max(1.0) },
+                if on { TEXT } else { MUTED },
+            );
         }
     }
     let last = g.toggles[2];
@@ -959,7 +1062,12 @@ fn project_search(app: &App, p: &mut Painter, s: &crate::search::ProjectSearch, 
         if n == 0 {
             "No results".into()
         } else {
-            format!("{n}{} result{} in {files} file{}", if f.truncated { "+" } else { "" }, if n == 1 { "" } else { "s" }, if files == 1 { "" } else { "s" })
+            format!(
+                "{n}{} result{} in {files} file{}",
+                if f.truncated { "+" } else { "" },
+                if n == 1 { "" } else { "s" },
+                if files == 1 { "" } else { "s" }
+            )
         }
     } else if s.searched.as_ref() != Some(&s.query) && !s.query.text.is_empty() {
         "Enter to search".into()
@@ -967,7 +1075,13 @@ fn project_search(app: &App, p: &mut Painter, s: &crate::search::ProjectSearch, 
         String::new()
     };
     let ix = last.x + last.w + app.px(10.0);
-    p.text(&info, R { x: ix, w: (bar.x + bar.w - ix - app.px(8.0)).max(0.0), ..field }, 12.0, if s.error.is_some() { DANGER } else { MUTED }, false);
+    p.text(
+        &info,
+        R { x: ix, w: (bar.x + bar.w - ix - app.px(8.0)).max(0.0), ..field },
+        12.0,
+        if s.error.is_some() { DANGER } else { MUTED },
+        false,
+    );
 
     let Some(found) = &s.found else { return };
     let (cw, ch) = (app.cell_w, app.cell_h);
@@ -1036,7 +1150,8 @@ fn project_search(app: &App, p: &mut Painter, s: &crate::search::ProjectSearch, 
                 }
                 xs.push(x);
                 for &(a, b) in &h.ranges {
-                    let (x0, x1) = (xs.get(a.max(skip)).copied().unwrap_or(x), xs.get(b).copied().unwrap_or(x).min(cols));
+                    let (x0, x1) =
+                        (xs.get(a.max(skip)).copied().unwrap_or(x), xs.get(b).copied().unwrap_or(x).min(cols));
                     if x1 > x0 {
                         p.rect(R { x: tx0 + x0 as f32 * cw, y: ty, w: (x1 - x0) as f32 * cw, h: ch }, MATCH);
                     }
@@ -1064,7 +1179,13 @@ fn highlighted(p: &mut Painter, s: &str, from: usize, hits: &[usize], r: R, pt: 
     let mut run_hit = false;
     let flush = |p: &mut Painter, run: &mut String, hit: bool, x: &mut f32| {
         if !run.is_empty() {
-            *x += p.text(run, R { x: *x, w: (r.x + r.w - *x).max(0.0), ..r }, pt, if hit { ACCENT } else { color }, false);
+            *x += p.text(
+                run,
+                R { x: *x, w: (r.x + r.w - *x).max(0.0), ..r },
+                pt,
+                if hit { ACCENT } else { color },
+                false,
+            );
             run.clear();
         }
     };
@@ -1085,7 +1206,10 @@ fn finder(app: &App, p: &mut Painter) {
     let Some(f) = &app.finder else { return };
     let r = app.finder_rect();
     let b = app.hairline();
-    p.rect(R { x: r.x - app.px(2.0), y: r.y + app.px(4.0), w: r.w + app.px(4.0), h: r.h + app.px(4.0) }, [0.0, 0.0, 0.0, 0.35]);
+    p.rect(
+        R { x: r.x - app.px(2.0), y: r.y + app.px(4.0), w: r.w + app.px(4.0), h: r.h + app.px(4.0) },
+        [0.0, 0.0, 0.0, 0.35],
+    );
     p.rect(r, BORDER);
     p.rect(r.inset(b), MENU_BG);
 
@@ -1100,7 +1224,10 @@ fn finder(app: &App, p: &mut Painter) {
         p.text(&f.query, ir, 14.0, TEXT, false)
     };
     let ch = app.px(18.0);
-    p.rect(R { x: ir.x + tw + app.px(1.0), y: input.y + ((input.h - ch) / 2.0).round(), w: app.px(1.5), h: ch }, ACCENT);
+    p.rect(
+        R { x: ir.x + tw + app.px(1.0), y: input.y + ((input.h - ch) / 2.0).round(), w: app.px(1.5), h: ch },
+        ACCENT,
+    );
 
     if f.matches.is_empty() {
         let msg = if f.loading {
@@ -1143,7 +1270,10 @@ fn menu(app: &App, p: &mut Painter) {
     let (w, h) = app.menu_size(&m.items);
     let r = R { x: m.x, y: m.y, w, h };
     // Soft shadow, border, body.
-    p.rect(R { x: r.x - app.px(1.0), y: r.y + app.px(2.0), w: r.w + app.px(2.0), h: r.h + app.px(2.0) }, [0.0, 0.0, 0.0, 0.35]);
+    p.rect(
+        R { x: r.x - app.px(1.0), y: r.y + app.px(2.0), w: r.w + app.px(2.0), h: r.h + app.px(2.0) },
+        [0.0, 0.0, 0.0, 0.35],
+    );
     p.rect(r, BORDER);
     let b = app.hairline();
     p.rect(r.inset(b), MENU_BG);
@@ -1156,7 +1286,13 @@ fn menu(app: &App, p: &mut Painter) {
             p.rect(ir, SELECT);
         }
         let danger = matches!(a, Action::Delete(_));
-        p.text(label, R { x: ir.x + app.px(10.0), w: ir.w - app.px(20.0), ..ir }, 13.0, if danger { DANGER } else { TEXT }, false);
+        p.text(
+            label,
+            R { x: ir.x + app.px(10.0), w: ir.w - app.px(20.0), ..ir },
+            13.0,
+            if danger { DANGER } else { TEXT },
+            false,
+        );
     }
 }
 
@@ -1171,7 +1307,10 @@ fn link_tooltip(app: &App, p: &mut Painter) {
     let x = mx.min(app.w - w - app.px(4.0)).max(0.0);
     let y = if my + app.px(18.0) + h <= app.h { my + app.px(18.0) } else { (my - app.px(6.0) - h).max(0.0) };
     let r = R { x, y, w, h };
-    p.rect(R { x: r.x - app.px(1.0), y: r.y + app.px(2.0), w: r.w + app.px(2.0), h: r.h + app.px(2.0) }, [0.0, 0.0, 0.0, 0.35]);
+    p.rect(
+        R { x: r.x - app.px(1.0), y: r.y + app.px(2.0), w: r.w + app.px(2.0), h: r.h + app.px(2.0) },
+        [0.0, 0.0, 0.0, 0.35],
+    );
     p.rect(r, BORDER);
     p.rect(r.inset(app.hairline()), MENU_BG);
     let row = |k: f32| R { x: r.x + pad, y: r.y + app.px(5.0) + k * line_h, w: r.w - 2.0 * pad + 1.0, h: line_h };
@@ -1195,15 +1334,24 @@ fn status(app: &App, p: &mut Painter) {
     // Shortcut hints only when asked for (settings.toml); the prefix mode always says it's on.
     let inline = app.prompt.as_ref().filter(|p| p.inline);
     let right = if let Some(pr) = inline {
-        if matches!(pr.kind, PromptKind::AddProject(_)) { "Enter create · Esc cancel · Tab complete" } else { "Enter create · Esc cancel" }
+        if matches!(pr.kind, PromptKind::AddProject(_)) {
+            "Enter create · Esc cancel · Tab complete"
+        } else {
+            "Enter create · Esc cancel"
+        }
     } else if !app.settings.shortcut_hints {
-        if app.prefix { "C-a" } else { "" }
+        if app.prefix {
+            "C-a"
+        } else {
+            ""
+        }
     } else if app.finder.is_some() {
         "↑↓ select · Enter open · Esc close"
     } else if app.prefix {
         "| split · t tab · 1-9 tab · h/l focus · x close · c clear · j/k worktree · n attention · Tab sidebar · b/a/f hide panels · q quit"
     } else {
-        let fed = app.focused().filter(|_| app.focus == Focus::Panes).and_then(|id| app.panes.get(&id)?.editor.as_ref());
+        let fed =
+            app.focused().filter(|_| app.focus == Focus::Panes).and_then(|id| app.panes.get(&id)?.editor.as_ref());
         let editing = fed.is_some();
         let finding = fed.and_then(|e| e.search.as_ref()).is_some_and(|s| s.focused);
         match app.focus {

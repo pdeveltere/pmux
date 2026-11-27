@@ -7,8 +7,8 @@ mod files;
 mod finder;
 mod git;
 mod gpu;
-mod hook;
 mod hold;
+mod hook;
 mod icons;
 mod import;
 mod input;
@@ -87,7 +87,9 @@ struct Runner {
 
 impl Runner {
     fn redraw(&mut self) {
-        let (Some(app), Some(gpu), Some(fonts)) = (self.app.as_mut(), self.gpu.as_mut(), self.fonts.as_mut()) else { return };
+        let (Some(app), Some(gpu), Some(fonts)) = (self.app.as_mut(), self.gpu.as_mut(), self.fonts.as_mut()) else {
+            return;
+        };
         if let Some(z) = app.zoom.take() {
             fonts.mono_pt = if z == 0 { text::MONO_PT } else { (fonts.mono_pt + z as f32).clamp(8.0, 32.0) };
             fonts.reset();
@@ -267,6 +269,15 @@ fn run() {
             std::process::exit(1);
         }
     };
-    let mut r = Runner { proxy, socket, app: None, window: None, gpu: None, fonts: None, bufs: Default::default(), occluded: false };
+    let mut r = Runner {
+        proxy,
+        socket,
+        app: None,
+        window: None,
+        gpu: None,
+        fonts: None,
+        bufs: Default::default(),
+        occluded: false,
+    };
     let _ = el.run_app(&mut r);
 }

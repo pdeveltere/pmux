@@ -115,7 +115,12 @@ impl Tree {
         let (y, h) = (self.y(i), self.row_h());
         // Zed's list item: 6px side padding, 14px icon, 4px gap to the label.
         let icon = R { x: self.area.x + self.px(6.0) + level as f32 * self.px(INDENT), y, w: self.px(ICON_PT), h };
-        TreeRow { bg: R { y, h, ..self.area }, text_x: icon.x + icon.w + self.px(4.0), icon, right: self.area.x + self.area.w - self.px(8.0) }
+        TreeRow {
+            bg: R { y, h, ..self.area },
+            text_x: icon.x + icon.w + self.px(4.0),
+            icon,
+            right: self.area.x + self.area.w - self.px(8.0),
+        }
     }
 
     /// Row index at screen y, if there's a row there.
@@ -258,7 +263,8 @@ impl App {
     /// The sidebar's tree of `nrows` rows. Keeps its wheel scroll; when the selection changes it
     /// scrolls just enough to show it.
     pub fn sidebar_tree(&self, nrows: usize) -> Tree {
-        let t = Tree { row_pt: SIDEBAR_ROW_H, ..self.make_tree(self.below_header(self.workspaces_content()), 0, nrows) };
+        let t =
+            Tree { row_pt: SIDEBAR_ROW_H, ..self.make_tree(self.below_header(self.workspaces_content()), 0, nrows) };
         let cap = t.capacity();
         let sel = self.sel.min(nrows.saturating_sub(1));
         let mut top = self.side_top.get();

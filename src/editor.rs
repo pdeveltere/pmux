@@ -425,7 +425,9 @@ impl Editor {
     pub fn select_word(&mut self, p: Pos) {
         let p = self.clamp(p);
         let chars: Vec<char> = self.lines[p.line].chars().collect();
-        let Some(&c) = chars.get(p.col).or_else(|| p.col.checked_sub(1).and_then(|i| chars.get(i))) else { return self.set_cursor(p, false) };
+        let Some(&c) = chars.get(p.col).or_else(|| p.col.checked_sub(1).and_then(|i| chars.get(i))) else {
+            return self.set_cursor(p, false);
+        };
         let k = class(c);
         let mut a = p.col.min(chars.len() - 1);
         let mut b = a;
@@ -550,7 +552,11 @@ impl Editor {
         } else {
             self.lines[c.line] = format!("{head}{first}");
             let last = rest.len() - 1;
-            let new: Vec<String> = rest.iter().enumerate().map(|(i, p)| if i == last { format!("{p}{tail}") } else { p.to_string() }).collect();
+            let new: Vec<String> = rest
+                .iter()
+                .enumerate()
+                .map(|(i, p)| if i == last { format!("{p}{tail}") } else { p.to_string() })
+                .collect();
             self.cur = Pos::new(c.line + rest.len(), len(rest[last]));
             self.lines.splice(c.line + 1..c.line + 1, new);
             self.shift_hl(c.line, rest.len() as isize);
@@ -574,7 +580,11 @@ impl Editor {
     /// Enter: new line keeping the current indentation.
     pub fn newline(&mut self) {
         let ind: String = self.lines[self.cur.line].chars().take_while(|c| *c == ' ' || *c == '\t').collect();
-        let ind = if self.selection().is_none() && self.cur.col < len(&ind) { ind.chars().take(self.cur.col).collect() } else { ind };
+        let ind = if self.selection().is_none() && self.cur.col < len(&ind) {
+            ind.chars().take(self.cur.col).collect()
+        } else {
+            ind
+        };
         self.insert(&format!("\n{ind}"));
     }
 
@@ -614,7 +624,11 @@ impl Editor {
                 e.lines[l].insert_str(0, &unit);
                 len(&unit) as isize
             } else {
-                let n = if e.lines[l].starts_with('\t') { 1 } else { e.lines[l].chars().take(TAB).take_while(|c| *c == ' ').count() };
+                let n = if e.lines[l].starts_with('\t') {
+                    1
+                } else {
+                    e.lines[l].chars().take(TAB).take_while(|c| *c == ' ').count()
+                };
                 e.lines[l].drain(..n);
                 -(n as isize)
             }
@@ -749,7 +763,14 @@ impl Editor {
     pub fn open_search(&mut self) {
         let seed = self.selected_text().filter(|t| !t.contains('\n'));
         let origin = self.selection().map_or(self.cur, |(a, _)| a);
-        let s = self.search.get_or_insert_with(|| Search { query: String::new(), case: false, focused: true, origin, matches: vec![], version: 0 });
+        let s = self.search.get_or_insert_with(|| Search {
+            query: String::new(),
+            case: false,
+            focused: true,
+            origin,
+            matches: vec![],
+            version: 0,
+        });
         s.focused = true;
         s.origin = origin;
         if let Some(q) = seed {
@@ -809,7 +830,11 @@ impl Editor {
     fn select_match(&mut self, p: Pos, forward: bool) {
         let Some(s) = &self.search else { return };
         let m = &s.matches;
-        let hit = if forward { m.iter().find(|(a, _)| *a >= p).or(m.first()) } else { m.iter().rev().find(|(a, _)| *a < p).or(m.last()) };
+        let hit = if forward {
+            m.iter().find(|(a, _)| *a >= p).or(m.first())
+        } else {
+            m.iter().rev().find(|(a, _)| *a < p).or(m.last())
+        };
         if let Some(&(a, b)) = hit {
             self.anchor = Some(a);
             self.cur = b;
@@ -1097,5 +1122,4 @@ mod tests {
         e.redo();
         assert_eq!(e.text(), t);
     }
-
 }

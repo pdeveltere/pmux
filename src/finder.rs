@@ -47,7 +47,17 @@ impl Finder {
 
     /// An empty popup for `root`, waiting for `set_files` (from `list` on another thread).
     pub fn loading(root: PathBuf) -> Self {
-        Finder { root, files: vec![], recent: vec![], query: String::new(), matches: vec![], sel: 0, top: 0, hover: None, loading: true }
+        Finder {
+            root,
+            files: vec![],
+            recent: vec![],
+            query: String::new(),
+            matches: vec![],
+            sel: 0,
+            top: 0,
+            hover: None,
+            loading: true,
+        }
     }
 
     /// The file list arrived: match the query typed so far against it.
@@ -74,11 +84,28 @@ impl Finder {
         self.top = 0;
         if q.is_empty() {
             let rest = (0..self.files.len()).filter(|i| !self.recent.contains(i));
-            self.matches = self.recent.iter().copied().chain(rest).take(MAX_RESULTS).map(|file| Match { file, pos: vec![], score: 0 }).collect();
+            self.matches = self
+                .recent
+                .iter()
+                .copied()
+                .chain(rest)
+                .take(MAX_RESULTS)
+                .map(|file| Match { file, pos: vec![], score: 0 })
+                .collect();
             return;
         }
-        let mut m: Vec<Match> = self.files.iter().enumerate().filter_map(|(file, f)| score(&q, f).map(|(score, pos)| Match { file, pos, score })).collect();
-        m.sort_unstable_by(|a, b| b.score.cmp(&a.score).then_with(|| self.files[a.file].len().cmp(&self.files[b.file].len())).then_with(|| a.file.cmp(&b.file)));
+        let mut m: Vec<Match> = self
+            .files
+            .iter()
+            .enumerate()
+            .filter_map(|(file, f)| score(&q, f).map(|(score, pos)| Match { file, pos, score }))
+            .collect();
+        m.sort_unstable_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then_with(|| self.files[a.file].len().cmp(&self.files[b.file].len()))
+                .then_with(|| a.file.cmp(&b.file))
+        });
         m.truncate(MAX_RESULTS);
         self.matches = m;
     }
@@ -108,14 +135,23 @@ impl Finder {
 pub fn list(root: &Path) -> Vec<String> {
     let git = |args: &[&str]| {
         let o = Command::new("git").arg("-C").arg(root).args(args).output().ok().filter(|o| o.status.success())?;
-        Some(String::from_utf8_lossy(&o.stdout).split('\0').filter(|s| !s.is_empty()).map(String::from).collect::<Vec<_>>())
+        Some(
+            String::from_utf8_lossy(&o.stdout)
+                .split('\0')
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect::<Vec<_>>(),
+        )
     };
     if let Some(files) = git(&["ls-files", "-z", "-co", "--exclude-standard", "--deduplicate"]) {
         // Drop what isn't an openable file, without a stat per file: tracked files deleted from
         // disk, and submodules (gitlinks, mode 160000).
-        let mut gone: std::collections::HashSet<String> = git(&["ls-files", "-z", "-d"]).unwrap_or_default().into_iter().collect();
+        let mut gone: std::collections::HashSet<String> =
+            git(&["ls-files", "-z", "-d"]).unwrap_or_default().into_iter().collect();
         let staged = git(&["ls-files", "-z", "-s"]).unwrap_or_default();
-        gone.extend(staged.iter().filter(|l| l.starts_with("160000 ")).filter_map(|l| Some(l.split_once('\t')?.1.to_string())));
+        gone.extend(
+            staged.iter().filter(|l| l.starts_with("160000 ")).filter_map(|l| Some(l.split_once('\t')?.1.to_string())),
+        );
         return files.into_iter().filter(|f| !gone.contains(f)).collect();
     }
     let mut out = vec![];
@@ -198,7 +234,13 @@ pub fn score(q: &[char], s: &str) -> Option<(i32, Vec<usize>)> {
             }
             let cons = if j >= 1 { dp[(i - 1) * n + j - 1] } else { NONE };
             let (via_cons, via_gap) = (cons + CONSECUTIVE, best.0 + GAP);
-            let (s, k) = if cons > NONE && via_cons >= via_gap { (via_cons, j - 1) } else if best.0 > NONE { (via_gap, best.1) } else { continue };
+            let (s, k) = if cons > NONE && via_cons >= via_gap {
+                (via_cons, j - 1)
+            } else if best.0 > NONE {
+                (via_gap, best.1)
+            } else {
+                continue;
+            };
             dp[i * n + j] = s + here;
             from[i * n + j] = k;
         }

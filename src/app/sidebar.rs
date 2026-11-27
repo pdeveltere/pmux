@@ -1,5 +1,7 @@
 //! Sidebar: the workspace → project → worktree tree, its keys, reordering, adding and closing.
-use super::{proj_key, subtree_end, ws_key, App, Close, Drop, Ev, Focus, Project, Prompt, PromptKind, Removal, Row, Workspace};
+use super::{
+    proj_key, subtree_end, ws_key, App, Close, Drop, Ev, Focus, Project, Prompt, PromptKind, Removal, Row, Workspace,
+};
 use crate::api::Reply;
 use crate::{config, git, input};
 use std::path::{Path, PathBuf};
@@ -60,7 +62,12 @@ impl App {
         match row {
             Row::Ws(w) => w < self.workspaces.len(),
             Row::Proj(w, p) => self.workspaces.get(w).is_some_and(|ws| p < ws.projects.len()),
-            Row::Wt(w, p, t) => self.workspaces.get(w).and_then(|ws| ws.projects.get(p)).and_then(|pr| pr.worktrees.as_ref()).is_some_and(|v| t < v.len()),
+            Row::Wt(w, p, t) => self
+                .workspaces
+                .get(w)
+                .and_then(|ws| ws.projects.get(p))
+                .and_then(|pr| pr.worktrees.as_ref())
+                .is_some_and(|v| t < v.len()),
             Row::New(..) => false,
         }
     }
@@ -78,7 +85,10 @@ impl App {
 
     /// (workspace, project) of the project at `path`.
     pub(super) fn proj_index(&self, path: &Path) -> Option<(usize, usize)> {
-        self.workspaces.iter().enumerate().find_map(|(w, ws)| ws.projects.iter().position(|p| p.path == path).map(|p| (w, p)))
+        self.workspaces
+            .iter()
+            .enumerate()
+            .find_map(|(w, ws)| ws.projects.iter().position(|p| p.path == path).map(|p| (w, p)))
     }
 
     /// The close target for a workspace or project row.
@@ -195,7 +205,9 @@ impl App {
             }
             Row::Proj(..) => match rows[idx] {
                 // Upper half of a workspace row: end of the workspace above; lower half: top of this one.
-                Row::Ws(w) if w > 0 && pos < idx as f32 + 0.5 => Some((Drop::Proj(w - 1, self.workspaces[w - 1].projects.len()), idx, 1)),
+                Row::Ws(w) if w > 0 && pos < idx as f32 + 0.5 => {
+                    Some((Drop::Proj(w - 1, self.workspaces[w - 1].projects.len()), idx, 1))
+                }
                 Row::Ws(w) => Some((Drop::Proj(w, 0), idx + 1, 1)),
                 Row::Proj(w, p) | Row::Wt(w, p, _) => {
                     let b = block(rows.iter().position(|r| *r == Row::Proj(w, p))?);
@@ -218,7 +230,9 @@ impl App {
                 self.workspaces.insert(to, ws);
                 Row::Ws(to)
             }
-            (Row::Proj(fw, fp), Drop::Proj(tw, tp)) if tw < self.workspaces.len() && tp <= self.workspaces[tw].projects.len() => {
+            (Row::Proj(fw, fp), Drop::Proj(tw, tp))
+                if tw < self.workspaces.len() && tp <= self.workspaces[tw].projects.len() =>
+            {
                 let path = &self.project(fw, fp).path;
                 if tw != fw && self.workspaces[tw].projects.iter().any(|p| &p.path == path) {
                     return self.say(format!("already in workspace {}", self.workspaces[tw].name));
@@ -262,7 +276,9 @@ impl App {
 
     /// Type the new worktree's branch in a new row under its project.
     pub(super) fn prompt_new_worktree(&mut self, project: PathBuf) {
-        let Some((w, _)) = self.proj_index(&project) else { return self.say("that project is no longer in the sidebar") };
+        let Some((w, _)) = self.proj_index(&project) else {
+            return self.say("that project is no longer in the sidebar");
+        };
         self.folded.remove(&ws_key(&self.workspaces[w].name));
         self.folded.remove(&proj_key(&project));
         self.start_inline(PromptKind::NewWorktree(project));
@@ -324,7 +340,10 @@ impl App {
 
     /// Add folder `dir` as a workspace at the top, named after it ("api 2" when "api" is taken); its name.
     pub(super) fn add_workspace(&mut self, dir: &str) -> Result<String, String> {
-        let path = std::fs::canonicalize(config::expand(dir.trim())).ok().filter(|p| p.is_dir()).ok_or(format!("not a directory: {dir}"))?;
+        let path = std::fs::canonicalize(config::expand(dir.trim()))
+            .ok()
+            .filter(|p| p.is_dir())
+            .ok_or(format!("not a directory: {dir}"))?;
         if let Some(ws) = self.workspaces.iter().find(|w| w.path == path) {
             return Err(format!("{} is already a workspace", ws.name));
         }
@@ -338,7 +357,9 @@ impl App {
     }
 
     pub(super) fn add_project(&mut self, w: usize, dir: &str) -> Result<String, String> {
-        let Some(proj) = Project::open(&config::expand(dir.trim())) else { return Err(format!("not a directory: {dir}")) };
+        let Some(proj) = Project::open(&config::expand(dir.trim())) else {
+            return Err(format!("not a directory: {dir}"));
+        };
         if w >= self.workspaces.len() {
             return Err("no such workspace".into());
         }
@@ -401,7 +422,9 @@ impl App {
         let Some((name, _, _)) = self.close_info(&c) else { return self.say("that's no longer in the sidebar") };
         match c {
             Close::Worktree(_, wt) if self.removing.contains(&wt) => self.say(format!("already deleting {name}")),
-            Close::Worktree(proj, wt) => self.start_removal(Removal { proj, wt, name, force: true, reply: None, auto: None }),
+            Close::Worktree(proj, wt) => {
+                self.start_removal(Removal { proj, wt, name, force: true, reply: None, auto: None })
+            }
             c => self.close(c),
         }
     }
@@ -411,7 +434,9 @@ impl App {
         self.leave_views(&paths);
         match c {
             // Off the UI thread: removing a big checkout takes a while. The row stays until done.
-            Close::Worktree(proj, wt) => self.start_removal(Removal { proj, wt, name, force: true, reply: None, auto: None }),
+            Close::Worktree(proj, wt) => {
+                self.start_removal(Removal { proj, wt, name, force: true, reply: None, auto: None })
+            }
             Close::Workspace(n) => {
                 if let Some(w) = self.ws_index(&n) {
                     let ws = self.workspaces.remove(w);

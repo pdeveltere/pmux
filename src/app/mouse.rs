@@ -4,8 +4,8 @@ use super::{proj_key, ws_key, App, Drag, Edge, Row, TabHit};
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
-use std::time::{Duration, Instant};
 use alacritty_terminal::term::TermMode;
+use std::time::{Duration, Instant};
 use winit::event::{ElementState, MouseButton};
 use winit::window::CursorIcon;
 
@@ -103,8 +103,11 @@ impl App {
             self.link_hover = link.map(|i| (i, std::time::Instant::now()));
             self.dirty = true;
         }
-        if (hover, tab, file, agent, button, plus) != (self.hover, self.tab_hover, self.files_hover, self.agents_hover, self.status_hover, self.plus_hover) {
-            (self.hover, self.tab_hover, self.files_hover, self.agents_hover, self.status_hover, self.plus_hover) = (hover, tab, file, agent, button, plus);
+        if (hover, tab, file, agent, button, plus)
+            != (self.hover, self.tab_hover, self.files_hover, self.agents_hover, self.status_hover, self.plus_hover)
+        {
+            (self.hover, self.tab_hover, self.files_hover, self.agents_hover, self.status_hover, self.plus_hover) =
+                (hover, tab, file, agent, button, plus);
             self.dirty = true;
         }
         self.set_cursor(icon);
@@ -132,7 +135,8 @@ impl App {
         // it, like Esc, so it can't leave the rest of the window unresponsive.
         if let Some(inline) = self.prompt.as_ref().map(|p| p.inline) {
             let on_it = if inline {
-                self.sidebar_rect().contains(x, y) && self.sidebar_row_at(y).is_some_and(|i| matches!(self.rows()[i], Row::New(..)))
+                self.sidebar_rect().contains(x, y)
+                    && self.sidebar_row_at(y).is_some_and(|i| matches!(self.rows()[i], Row::New(..)))
             } else {
                 self.status_rect().contains(x, y)
             };

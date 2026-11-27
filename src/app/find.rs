@@ -115,7 +115,12 @@ impl App {
     pub fn finder_row(&self, k: usize) -> R {
         let r = self.finder_rect();
         let pad = self.px(PAD);
-        R { x: r.x + pad, y: r.y + self.px(INPUT_H) + self.hairline() + pad + k as f32 * self.px(ROW_H), w: r.w - 2.0 * pad, h: self.px(ROW_H) }
+        R {
+            x: r.x + pad,
+            y: r.y + self.px(INPUT_H) + self.hairline() + pad + k as f32 * self.px(ROW_H),
+            w: r.w - 2.0 * pad,
+            h: self.px(ROW_H),
+        }
     }
 
     /// Result index under (x, y).

@@ -22,7 +22,9 @@ fn ws(rows: u16, cols: u16) -> libc::winsize {
 pub fn spawn(cwd: &Path, rows: u16, cols: u16, env: &[(&str, String)]) -> io::Result<Pty> {
     let (mut m, mut s) = (0, 0);
     let w = ws(rows, cols);
-    if unsafe { libc::openpty(&mut m, &mut s, std::ptr::null_mut(), std::ptr::null_mut(), &w as *const _ as *mut _) } != 0 {
+    if unsafe { libc::openpty(&mut m, &mut s, std::ptr::null_mut(), std::ptr::null_mut(), &w as *const _ as *mut _) }
+        != 0
+    {
         return Err(io::Error::last_os_error());
     }
     unsafe { libc::fcntl(m, libc::F_SETFD, libc::FD_CLOEXEC) };
@@ -86,9 +88,7 @@ pub fn proc_path(pid: i32) -> Option<String> {
 /// Which known coding agent an executable path belongs to, by name.
 pub fn agent_of(path: &str) -> Option<&'static str> {
     let p = path.to_ascii_lowercase();
-    ["claude", "codex", "gemini", "opencode", "aider", "amp", "cursor-agent"]
-        .into_iter()
-        .find(|a| p.contains(a))
+    ["claude", "codex", "gemini", "opencode", "aider", "amp", "cursor-agent"].into_iter().find(|a| p.contains(a))
 }
 
 /// A process's command line.
@@ -97,7 +97,9 @@ pub fn proc_args(pid: i32) -> Vec<String> {
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
     let mut buf = vec![0u8; 64 * 1024];
     let mut len = buf.len();
-    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, buf.as_mut_ptr() as *mut _, &mut len, std::ptr::null_mut(), 0) } != 0 || len < 4 {
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, buf.as_mut_ptr() as *mut _, &mut len, std::ptr::null_mut(), 0) } != 0
+        || len < 4
+    {
         return vec![];
     }
     // argc, the executable path, padding NULs, then argv.
@@ -112,7 +114,9 @@ pub fn proc_args(pid: i32) -> Vec<String> {
 #[cfg(not(target_os = "macos"))]
 pub fn proc_args(pid: i32) -> Vec<String> {
     std::fs::read(format!("/proc/{pid}/cmdline"))
-        .map(|b| b.split(|c| *c == 0).filter(|s| !s.is_empty()).map(|s| String::from_utf8_lossy(s).into_owned()).collect())
+        .map(|b| {
+            b.split(|c| *c == 0).filter(|s| !s.is_empty()).map(|s| String::from_utf8_lossy(s).into_owned()).collect()
+        })
         .unwrap_or_default()
 }
 

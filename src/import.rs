@@ -57,7 +57,18 @@ pub fn session_id(pid: i64) -> Option<String> {
 /// `claude <its flags> --resume <id>`, dropping whatever resume/continue flags it started with.
 pub fn claude_cmd(argv: &[String], sid: Option<String>) -> String {
     // Flags that take no value; any other flag's next word is its value.
-    const BOOL: &[&str] = &["--dangerously-skip-permissions", "--verbose", "--debug", "-d", "--ide", "--chrome", "--no-chrome", "-c", "--continue", "--fork-session"];
+    const BOOL: &[&str] = &[
+        "--dangerously-skip-permissions",
+        "--verbose",
+        "--debug",
+        "-d",
+        "--ide",
+        "--chrome",
+        "--no-chrome",
+        "-c",
+        "--continue",
+        "--fork-session",
+    ];
     let mut out = vec!["claude".to_string()];
     let (mut skip, mut value) = (false, false);
     for a in argv.iter().skip(1) {
@@ -90,7 +101,10 @@ pub fn claude_cmd(argv: &[String], sid: Option<String>) -> String {
 fn item(t: &Value) -> Option<(String, u32, Item)> {
     let fg = &t["foreground"];
     let cwd = fg["cwd"].as_str().or(t["cwd"].as_str())?;
-    let argv: Vec<String> = fg["argv"].as_array().map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect()).unwrap_or_default();
+    let argv: Vec<String> = fg["argv"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+        .unwrap_or_default();
     let prog = argv.first().map(|a| base(a)).unwrap_or("");
     let claude = t["status"]["app"].as_str() == Some("claude-code") || prog == "claude";
     let cmd = if claude {
@@ -112,7 +126,12 @@ fn item(t: &Value) -> Option<(String, u32, Item)> {
 /// Gather Herdr's live terminals into a plan for the window.
 pub fn plan(run: bool) -> Result<Plan, String> {
     let ls = hc(&["ls"])?;
-    let addrs: Vec<String> = ls["terminals"].as_array().into_iter().flatten().filter_map(|t| t["address"].as_str().map(String::from)).collect();
+    let addrs: Vec<String> = ls["terminals"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| t["address"].as_str().map(String::from))
+        .collect();
     // `hc get` each, in parallel: one process per terminal.
     let handles: Vec<_> = addrs.into_iter().map(|a| std::thread::spawn(move || hc(&["get", &a]))).collect();
     let mut got = Vec::new();
@@ -147,7 +166,12 @@ pub fn main(args: &[String]) -> i32 {
         }
         Ok(p) if args.iter().any(|a| a == "--dry-run") => {
             for it in &p.items {
-                println!("{:<34} {:<50} {}", &it.group[..it.group.len().min(34)], it.cwd.display(), it.cmd.as_deref().unwrap_or("(shell)"));
+                println!(
+                    "{:<34} {:<50} {}",
+                    &it.group[..it.group.len().min(34)],
+                    it.cwd.display(),
+                    it.cmd.as_deref().unwrap_or("(shell)")
+                );
             }
             0
         }
@@ -165,8 +189,12 @@ mod tests {
 
     #[test]
     fn claude_resume_keeps_flags() {
-        let argv: Vec<String> = ["claude", "--dangerously-skip-permissions", "-c", "--model", "opus", "fix it"].map(String::from).to_vec();
-        assert_eq!(claude_cmd(&argv, Some("abc".into())), "claude --dangerously-skip-permissions --model opus --resume abc");
+        let argv: Vec<String> =
+            ["claude", "--dangerously-skip-permissions", "-c", "--model", "opus", "fix it"].map(String::from).to_vec();
+        assert_eq!(
+            claude_cmd(&argv, Some("abc".into())),
+            "claude --dangerously-skip-permissions --model opus --resume abc"
+        );
         assert_eq!(claude_cmd(&argv[..1], None), "claude --continue");
     }
 }
