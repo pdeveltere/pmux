@@ -31,7 +31,9 @@ zeno = "0.3"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"
 objc2-app-kit = { version = "0.2", default-features = false, features = ["std", "NSApplication", "NSMenu", "NSMenuItem", "NSResponder"] }
-objc2-foundation = { version = "0.2", default-features = false, features = ["std", "NSString", "NSThread"] }
+objc2-foundation = { version = "0.2", default-features = false, features = ["std", "NSString", "NSThread", "NSBundle", "NSArray"] }
+block2 = "0.5"
+objc2-user-notifications = { version = "0.2", default-features = false, features = ["std", "block2", "UNUserNotificationCenter", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSound", "UNNotificationTrigger"] }
 wgpu = { version = "27", default-features = false, features = ["metal", "wgsl", "std"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]

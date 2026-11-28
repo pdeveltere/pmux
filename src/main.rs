@@ -14,6 +14,8 @@ mod import;
 mod input;
 #[cfg(target_os = "macos")]
 mod macmenu;
+#[cfg(target_os = "macos")]
+mod notify;
 mod platform;
 mod pty;
 mod search;
@@ -163,6 +165,8 @@ impl ApplicationHandler<Ev> for Runner {
         self.window = Some(window);
         #[cfg(target_os = "macos")]
         macmenu::install(self.proxy.clone());
+        #[cfg(target_os = "macos")]
+        notify::install(self.proxy.clone());
     }
 
     fn new_events(&mut self, _: &ActiveEventLoop, cause: StartCause) {
@@ -203,6 +207,7 @@ impl ApplicationHandler<Ev> for Runner {
                 self.occluded = o;
                 app.dirty |= !o;
             }
+            WindowEvent::Focused(f) => app.window_focused = f,
             WindowEvent::ModifiersChanged(m) => app.mods = m.state(),
             WindowEvent::KeyboardInput { event, .. } => app.on_key(&event),
             WindowEvent::CursorMoved { position, .. } => app.on_cursor_moved(position.x as f32, position.y as f32),
@@ -225,6 +230,10 @@ impl ApplicationHandler<Ev> for Runner {
             return self.shutdown(el);
         }
         let Some(w) = self.window.as_ref() else { return };
+        app.check_attention();
+        if std::mem::take(&mut app.raise) {
+            w.focus_window();
+        }
         if app.dirty {
             app.sync_layout();
             // Hidden: stay dirty, so becoming visible draws. A `pmux snapshot` still gets its frame.

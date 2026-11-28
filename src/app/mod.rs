@@ -5,6 +5,7 @@
 //! `edit` (editor panes), `find` (go to file), `psearch` (find in project), `navigate` (tabs/focus), `merged` (merged worktrees delete themselves), `keys`, `mouse`, `menu`, `commands` (socket API).
 mod adopt;
 mod agents;
+mod attention;
 mod commands;
 mod edit;
 mod explorer;
@@ -80,6 +81,8 @@ pub enum Ev {
     Searched(u32, u64, crate::search::Query, crate::search::Found),
     /// pmux → Settings… in the menu bar.
     OpenSettings,
+    /// A notification about this pane was clicked: show it.
+    ShowPane(u32),
 }
 
 pub type Tx = EventLoopProxy<Ev>;
@@ -181,6 +184,12 @@ pub struct App {
     /// Files opened in editors, most recent first.
     recent_files: Vec<PathBuf>,
     pub settings: crate::settings::Settings,
+    /// The window has keyboard focus (you're looking at pmux).
+    pub window_focused: bool,
+    /// Bring the window to the front (a notification was clicked).
+    pub raise: bool,
+    /// What notifications know: each agent's last state, which have one posted, the badge.
+    pub attention: attention::Attention,
     socket: PathBuf,
     tx: Tx,
     /// Link to the background pmux holding the terminals (`None` until attached, or after it stopped).
@@ -294,6 +303,9 @@ impl App {
             finder: None,
             recent_files: Vec::new(),
             settings: Default::default(),
+            window_focused: true,
+            raise: false,
+            attention: Default::default(),
             socket,
             hold: None,
             saved_last: None,
@@ -406,6 +418,10 @@ impl App {
             }
             Ev::Searched(id, gen, q, f) => self.search_done(id, gen, q, f),
             Ev::OpenSettings => self.open_file(&crate::settings::ensure()),
+            Ev::ShowPane(id) => {
+                self.show_pane(id);
+                self.raise = true;
+            }
         }
     }
 

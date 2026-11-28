@@ -4,11 +4,19 @@ use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     /// Keyboard shortcut hints on the right of the status bar.
     pub shortcut_hints: bool,
+    /// macOS notifications when an agent needs you or finishes while you look elsewhere.
+    pub notifications: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings { shortcut_hints: false, notifications: true }
+    }
 }
 
 /// Written when the file doesn't exist yet: every setting, commented out at its default.
@@ -16,6 +24,9 @@ const TEMPLATE: &str = "# pmux settings. Save to apply.
 
 # Show keyboard shortcut hints in the status bar.
 # shortcut_hints = false
+
+# Notify when an agent needs you or finishes while you look elsewhere.
+# notifications = true
 ";
 
 pub fn path() -> PathBuf {

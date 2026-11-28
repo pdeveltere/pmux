@@ -1415,12 +1415,14 @@ name = "pmux"
 version = "0.0.2"
 dependencies = [
  "alacritty_terminal",
+ "block2",
  "bytemuck",
  "cosmic-text",
  "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "objc2-user-notifications",
  "pollster",
  "regex",
  "serde",
